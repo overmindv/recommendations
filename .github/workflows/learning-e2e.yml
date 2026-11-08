@@ -9,7 +9,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   journeys:
-    uses: overmindv/tests/.github/workflows/e2e.yml@848a5bd9cff2524dadc8de7e61f0bbf9b4ac589b
+    uses: overmindv/tests/.github/workflows/e2e.yml@79b7071fc27da34fe641d3229260acd14abd773b
     with:
-      tests_ref: 848a5bd9cff2524dadc8de7e61f0bbf9b4ac589b
+      tests_ref: 79b7071fc27da34fe641d3229260acd14abd773b
       target_repo: recommendations
