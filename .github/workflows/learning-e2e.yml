@@ -1,0 +1,15 @@
+name: Student and author journeys
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: learning-e2e-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  journeys:
+    uses: overmindv/tests/.github/workflows/e2e.yml@71fc5b1a317a7522d7c2db11421fc0e30feb6d8b
+    with:
+      tests_ref: 71fc5b1a317a7522d7c2db11421fc0e30feb6d8b
+      target_repo: recommendations
