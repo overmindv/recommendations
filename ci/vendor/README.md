@@ -2,8 +2,8 @@
 
 Неизменяемый git archive только tracked файлов sandbox на commit из sandbox-source.json.
 Этот архив хранится только в закрытом recommendations: sandbox тоже private, а deploy
-keys запрещены организацией. Личные PAT в Actions не передаются. Sandbox исходники
-не изменены. Reusable tests workflow проверяет SHA commit и SHA256 архива до извлечения.
+keys запрещены организацией. Личные PAT в Actions не передаются. Содержимое архива точно
+соответствует выбранному sandbox commit, без дополнительных патчей. Reusable tests workflow проверяет SHA commit и SHA256 архива до извлечения.
 
 При обновлении sandbox заменить архив через git archive требуемого commit, пересчитать
 SHA256 и одновременно обновить tests/ci/source-refs.json. Не включать dirty файлы,
