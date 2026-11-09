@@ -2,7 +2,6 @@ package planner
 
 import (
 	"context"
-	"sort"
 )
 
 type outcome struct{ accepted, failed bool }
@@ -138,17 +137,8 @@ func Build(ctx context.Context, in Request) (Plan, error) {
 		}
 		candidates = append(candidates, candidate{task: task, minutes: minutes, reason: reason, failed: results[task.ID].failed, fit: level - d})
 	}
-	sort.Slice(candidates, func(i, j int) bool {
-		a, b := candidates[i], candidates[j]
-		if a.failed != b.failed {
-			return a.failed
-		}
-		if a.fit != b.fit {
-			return a.fit < b.fit
-		}
-		return a.task.ID < b.task.ID
-	})
 	selectedCount := make(map[string]int)
+	selectedTypeCount := make(map[string]map[string]int)
 	used := make(map[string]bool)
 	for len(plan.Items) < MaxItems {
 		if err := ctx.Err(); err != nil {
@@ -159,7 +149,7 @@ func Build(ctx context.Context, in Request) (Plan, error) {
 			if used[c.task.ID] || plan.TotalMinutes+c.minutes > in.Minutes {
 				continue
 			}
-			if best == -1 || selectedCount[c.task.TopicID] < selectedCount[candidates[best].task.TopicID] {
+			if best == -1 || betterCandidate(c, candidates[best], selectedCount, selectedTypeCount) {
 				best = i
 			}
 		}
@@ -171,6 +161,10 @@ func Build(ctx context.Context, in Request) (Plan, error) {
 		plan.TotalMinutes += c.minutes
 		used[c.task.ID] = true
 		selectedCount[c.task.TopicID]++
+		if selectedTypeCount[c.task.TopicID] == nil {
+			selectedTypeCount[c.task.TopicID] = make(map[string]int)
+		}
+		selectedTypeCount[c.task.TopicID][c.task.TaskType]++
 	}
 	if len(plan.Items) == 0 {
 		warning := "NO_ELIGIBLE_TASKS"
@@ -180,4 +174,23 @@ func Build(ctx context.Context, in Request) (Plan, error) {
 		plan.Warnings = append(plan.Warnings, warning)
 	}
 	return plan, nil
+}
+
+// betterCandidate сохраняет приоритет новой практики после ошибки и выравнивает
+// форматы внутри темы. Последнее сравнение по ID делает выбор воспроизводимым.
+func betterCandidate(a, b candidate, selectedCount map[string]int, selectedTypeCount map[string]map[string]int) bool {
+	if selectedCount[a.task.TopicID] != selectedCount[b.task.TopicID] {
+		return selectedCount[a.task.TopicID] < selectedCount[b.task.TopicID]
+	}
+	if a.failed != b.failed {
+		return !a.failed
+	}
+	aTypes, bTypes := selectedTypeCount[a.task.TopicID], selectedTypeCount[b.task.TopicID]
+	if aTypes[a.task.TaskType] != bTypes[b.task.TaskType] {
+		return aTypes[a.task.TaskType] < bTypes[b.task.TaskType]
+	}
+	if a.fit != b.fit {
+		return a.fit < b.fit
+	}
+	return a.task.ID < b.task.ID
 }

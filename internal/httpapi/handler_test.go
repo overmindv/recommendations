@@ -39,7 +39,7 @@ func TestHTTPContract(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.PolicyVersion != "practice-v1" || got.TotalMinutes != 10 || len(got.Items) != 1 || got.Items[0].TaskID != "00000000-0000-0000-0000-000000000002" || got.Items[0].TaskVersionID != "00000000-0000-0000-0000-000000000003" || got.Items[0].ReasonCode != "START_TOPIC" || got.Warnings == nil {
+	if got.PolicyVersion != "practice-v2" || got.TotalMinutes != 10 || len(got.Items) != 1 || got.Items[0].TaskID != "00000000-0000-0000-0000-000000000002" || got.Items[0].TaskVersionID != "00000000-0000-0000-0000-000000000003" || got.Items[0].ReasonCode != "START_TOPIC" || got.Warnings == nil {
 		t.Fatalf("contract mismatch: %s", w.Body)
 	}
 	var wire map[string]json.RawMessage

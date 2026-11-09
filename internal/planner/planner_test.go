@@ -35,7 +35,7 @@ func TestColdStartAndBudget(t *testing.T) {
 	in.Tasks = append(in.Tasks, task(102, 1, "hard", "single_choice"), task(103, 1, "easy", "programming"))
 	in.Minutes = 20
 	got := build(t, in)
-	if got.PolicyVersion != "practice-v1" || got.TotalMinutes != 10 || len(got.Items) != 1 || got.Items[0].TaskID != id(101) || got.Items[0].ReasonCode != "START_TOPIC" {
+	if got.PolicyVersion != "practice-v2" || got.TotalMinutes != 10 || len(got.Items) != 1 || got.Items[0].TaskID != id(101) || got.Items[0].ReasonCode != "START_TOPIC" {
 		t.Fatalf("unexpected plan: %+v", got)
 	}
 	if len(got.Warnings) != 0 {
@@ -114,8 +114,8 @@ func TestEvidenceSemantics(t *testing.T) {
 			in.Tasks = append(in.Tasks, task(102, 1, "easy", "single_choice"))
 			in.Evidence = []Evidence{evidence(in.Tasks[1], verdict)}
 			got := build(t, in)
-			if got.Items[0].TaskID != id(102) || got.Items[0].ReasonCode != "PRACTICE_GAP" {
-				t.Fatalf("expected targeted practice: %+v", got)
+			if got.Items[0].TaskID != id(101) || got.Items[0].ReasonCode != "PRACTICE_GAP" || got.Items[1].TaskID != id(102) {
+				t.Fatalf("expected fresh practice before a failed task: %+v", got)
 			}
 		})
 	}
@@ -157,13 +157,37 @@ func TestDifficultyProgressionAndWrongAnswerFallback(t *testing.T) {
 	}
 	in.Evidence = append(in.Evidence, evidence(in.Tasks[8], "wrong_answer"))
 	got = build(t, in)
-	if got.Items[0].TaskID != id(202) || got.Items[0].ReasonCode != "PRACTICE_GAP" {
-		t.Fatalf("expected easier practice: %+v", got)
+	if got.Items[0].TaskID != id(202) || got.Items[0].ReasonCode != "PRACTICE_GAP" || got.Items[1].TaskID != id(201) {
+		t.Fatalf("expected fresh suitable practice after a failed hard task: %+v", got)
 	}
 	for _, item := range got.Items {
 		if item.Difficulty == "hard" {
 			t.Fatal("hard task retained after gap")
 		}
+	}
+}
+
+func TestFailedTaskRemainsFallback(t *testing.T) {
+	in := base()
+	in.Evidence = []Evidence{evidence(in.Tasks[0], "wrong_answer")}
+	got := build(t, in)
+	if len(got.Items) != 1 || got.Items[0].TaskID != in.Tasks[0].ID || got.Items[0].ReasonCode != "PRACTICE_GAP" {
+		t.Fatalf("failed task should remain eligible when no alternative exists: %+v", got)
+	}
+}
+
+func TestBalancesTaskTypesWithinTopic(t *testing.T) {
+	in := base()
+	in.Minutes = 40
+	in.Tasks = []Task{
+		task(101, 1, "easy", "single_choice"),
+		task(102, 1, "easy", "single_choice"),
+		task(103, 1, "easy", "multiple_choice"),
+		task(104, 1, "easy", "programming"),
+	}
+	got := build(t, in)
+	if len(got.Items) != 3 || got.Items[0].TaskID != id(101) || got.Items[1].TaskID != id(103) || got.Items[2].TaskID != id(104) || got.TotalMinutes != 40 {
+		t.Fatalf("budget or type balance violated: %+v", got)
 	}
 }
 

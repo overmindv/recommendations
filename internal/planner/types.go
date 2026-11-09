@@ -3,7 +3,7 @@ package planner
 import "time"
 
 const (
-	PolicyVersion  = "practice-v1"
+	PolicyVersion  = "practice-v2"
 	MaxTopics      = 32
 	MaxTasks       = 2000
 	MaxEvidence    = 2000
