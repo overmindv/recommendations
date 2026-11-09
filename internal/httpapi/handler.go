@@ -34,14 +34,20 @@ func NewHandler(token string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Type", "application/json")
-		auth := r.Header.Get("Authorization")
-		provided := sha256.Sum256([]byte(strings.TrimPrefix(auth, "Bearer ")))
-		if token == "" || len(r.Header.Values("Authorization")) != 1 || !strings.HasPrefix(auth, "Bearer ") || subtle.ConstantTimeCompare(expected[:], provided[:]) != 1 || len(r.Header.Values("X-User-ID")) != 1 || !planner.ValidID(r.Header.Get("X-User-ID")) {
+		if !authorized(r, token, expected) {
 			writeJSON(w, http.StatusForbidden, publicError{"PERMISSION_DENIED", "Permission denied"})
 			return
 		}
 		endpoint.ServeHTTP(w, r)
 	})
+}
+
+func authorized(r *http.Request, token string, expected [32]byte) bool {
+	auth := r.Header.Get("Authorization")
+	provided := sha256.Sum256([]byte(strings.TrimPrefix(auth, "Bearer ")))
+	return token != "" && len(r.Header.Values("Authorization")) == 1 && strings.HasPrefix(auth, "Bearer ") &&
+		subtle.ConstantTimeCompare(expected[:], provided[:]) == 1 && len(r.Header.Values("X-User-ID")) == 1 &&
+		planner.ValidID(r.Header.Get("X-User-ID"))
 }
 
 func preview(w http.ResponseWriter, r *http.Request) {

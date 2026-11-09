@@ -1,10 +1,12 @@
 # recommendations
 
-Внутренний stateless сервис предварительной подборки практики. Пользователь выбирает
+Внутренний сервис предварительной подборки практики. Пользователь выбирает
 1–5 тем и бюджет 10–240 минут; gateway передаёт разрешённые опубликованные задачи,
 активные темы с полным графом prerequisites и историю только проверенного actor.
-Сервис не читает чужие БД и не вызывает зависимости. PostgreSQL, Kafka projections,
-сохранённые цели/планы и content в этот MVP не входят.
+Сервис не читает чужие БД и не вызывает зависимости. Подборка остаётся stateless;
+при заданном `DATABASE_URL` отдельная PostgreSQL хранит только цель пользователя
+(темы, бюджет занятия и revision). Kafka projections, календарный план и content
+пока не подключены.
 
 Это прозрачная эвристика для выбора следующей практики, **не модель освоения** и не
 вероятность знания. Три accepted — лишь правило допуска к практике зависимой темы;
@@ -17,12 +19,19 @@
 
 ```sh
 export RECOMMENDATIONS_SERVICE_TOKEN="$(openssl rand -hex 32)"
+export DATABASE_URL='postgres://recommendations:...@localhost:5438/recommendations?sslmode=disable'
+make migrate-up
 make run
 make lint
 make test
 make build
 make benchmark
 ```
+
+Компонентная проверка цели выполняется только на выделенной базе после
+`make migrate-up`: `GOALS_TEST_DSN='postgres://.../goals_component?sslmode=disable' make ctest`.
+Тест удаляет только собственные записи; не направлять его на общую или production БД.
+Результаты проверки этого среза: `docs/verification-goals.md`.
 
 Секрет gateway должен совпадать. Не сохранять токен в git, отчётах или логах.
 Docker: `docker build -t recommendations .`; запуск — с переменной токена и внутренней
@@ -31,6 +40,7 @@ Docker: `docker build -t recommendations .`; запуск — с перемен�
 | Переменная | Правило |
 | --- | --- |
 | `RECOMMENDATIONS_SERVICE_TOKEN` | Обязательна, 32–4096 байт, без пробелов; случайный секрет |
+| `DATABASE_URL` | PostgreSQL сервиса для сохранённых целей; без неё preview работает, а API целей возвращает 503 |
 | `HTTP_ADDRESS` | Адрес `host:port`, приоритет над `HTTP_ADDR` |
 | `HTTP_ADDR` | Стандартный адрес parker; приоритет над `PORT` |
 | `PORT` | Совместимость с Railway: `:PORT`; по умолчанию `:8080` |
@@ -38,10 +48,21 @@ Docker: `docker build -t recommendations .`; запуск — с перемен�
 | `METRICS_ENABLED`, `PPROF_ENABLED`, `LOG_LEVEL` | parker: `true`, `false`, `info` |
 
 Parker предоставляет `GET /health`, `GET /ready`, `GET /metrics`, request IDs,
-обезличенные access logs и graceful shutdown. Нет DB/Kafka health checks, потому что
-сервис не использует эти зависимости. Read-header timeout — 5s, idle timeout — 60s;
+обезличенные access logs и graceful shutdown. При `DATABASE_URL` добавляется
+health-check PostgreSQL; Kafka не используется. Read-header timeout — 5s, idle timeout — 60s;
 HTTP-обработчик ограничен 3s. Метрики HTTP не содержат user/task IDs. Профили и тела
-запросов не логируются и не сохраняются; ответы содержат `Cache-Control: no-store`.
+запросов не логируются; ответы содержат `Cache-Control: no-store`.
+
+## Сохранённая цель
+
+С тем же service token и доверенным `X-User-ID`: `GET /v1/practice-goal` возвращает
+цель или 404, `PUT /v1/practice-goal` заменяет её и увеличивает revision,
+`DELETE /v1/practice-goal` идемпотентно удаляет. PUT принимает только
+`{"topic_ids":["uuid"],"minutes":60}`: 1–5 уникальных UUID и 10–240 минут.
+До записи gateway проверяет, что темы активны и граф prerequisites корректен.
+Другой actor не может прочитать или изменить цель. При отсутствии БД или ошибке
+чтения возвращается 503, а не пустая цель. Цель не хранит оценку знаний: при
+возвращении на страницу gateway заново строит preview по текущим решениям.
 
 ## Контракт
 
