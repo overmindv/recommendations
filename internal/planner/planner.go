@@ -6,11 +6,12 @@ import (
 
 type outcome struct{ accepted, failed bool }
 type candidate struct {
-	task    Task
-	minutes int
-	reason  string
-	failed  bool
-	fit     int
+	task     Task
+	minutes  int
+	reason   string
+	failed   bool
+	fit      int
+	priority int
 }
 
 // Build — чистая детерминированная политика. Сформированный план не считается evidence.
@@ -21,7 +22,7 @@ func Build(ctx context.Context, in Request) (Plan, error) {
 	if err := Validate(in); err != nil {
 		return Plan{}, err
 	}
-	plan := Plan{PolicyVersion: PolicyVersion, Warnings: []string{}, Items: []Item{}}
+	plan := Plan{PolicyVersion: PolicyVersion, Warnings: []string{}, Items: []Item{}, Sessions: []Session{}, RequestedSessions: max(1, in.SessionCount)}
 	if in.InputTruncated {
 		plan.Warnings = append(plan.Warnings, "PARTIAL_DATA")
 	}
@@ -107,16 +108,7 @@ func Build(ctx context.Context, in Request) (Plan, error) {
 		if !eligible[task.TopicID] || results[task.ID].accepted {
 			continue
 		}
-		level := 1
-		if accepted[task.TopicID] >= 3 {
-			level = 2
-		}
-		if accepted[task.TopicID] >= 6 {
-			level = 3
-		}
-		if failed[task.TopicID] > 0 && level > 1 {
-			level--
-		}
+		level := recommendedLevel(accepted[task.TopicID], failed[task.TopicID])
 		d := difficulty(task.Difficulty)
 		if d > level {
 			continue
@@ -131,40 +123,55 @@ func Build(ctx context.Context, in Request) (Plan, error) {
 		if prerequisites[task.TopicID] {
 			reason = "PREREQUISITE"
 		}
-		minutes := []int{0, 10, 15, 20}[d]
-		if task.TaskType == "programming" {
-			minutes = []int{0, 20, 35, 50}[d]
+		priority := 0
+		if reason == "PRACTICE_GAP" {
+			priority = 1
 		}
-		candidates = append(candidates, candidate{task: task, minutes: minutes, reason: reason, failed: results[task.ID].failed, fit: level - d})
+		if reason == "PREREQUISITE" {
+			priority = 2
+		}
+		candidates = append(candidates, candidate{task: task, minutes: estimatedMinutes(task), reason: reason, failed: results[task.ID].failed, fit: level - d, priority: priority})
 	}
 	selectedCount := make(map[string]int)
 	selectedTypeCount := make(map[string]map[string]int)
 	used := make(map[string]bool)
-	for len(plan.Items) < MaxItems {
-		if err := ctx.Err(); err != nil {
-			return Plan{}, err
-		}
-		best := -1
-		for i, c := range candidates {
-			if used[c.task.ID] || plan.TotalMinutes+c.minutes > in.Minutes {
-				continue
+	for number := 1; number <= plan.RequestedSessions; number++ {
+		session := Session{Number: number, Items: []Item{}}
+		for len(session.Items) < MaxItems {
+			if err := ctx.Err(); err != nil {
+				return Plan{}, err
 			}
-			if best == -1 || betterCandidate(c, candidates[best], selectedCount, selectedTypeCount) {
-				best = i
+			best := -1
+			for i, c := range candidates {
+				if used[c.task.ID] || session.TotalMinutes+c.minutes > in.Minutes {
+					continue
+				}
+				if best == -1 || betterCandidate(c, candidates[best], selectedCount, selectedTypeCount) {
+					best = i
+				}
 			}
+			if best == -1 {
+				break
+			}
+			c := candidates[best]
+			session.Items = append(session.Items, Item{TaskID: c.task.ID, TaskVersionID: c.task.TaskVersionID, TopicID: c.task.TopicID, Title: c.task.Title, Difficulty: c.task.Difficulty, TaskType: c.task.TaskType, EstimatedMinutes: c.minutes, ReasonCode: c.reason})
+			session.TotalMinutes += c.minutes
+			used[c.task.ID] = true
+			selectedCount[c.task.TopicID]++
+			if selectedTypeCount[c.task.TopicID] == nil {
+				selectedTypeCount[c.task.TopicID] = make(map[string]int)
+			}
+			selectedTypeCount[c.task.TopicID][c.task.TaskType]++
 		}
-		if best == -1 {
+		if len(session.Items) == 0 {
 			break
 		}
-		c := candidates[best]
-		plan.Items = append(plan.Items, Item{TaskID: c.task.ID, TaskVersionID: c.task.TaskVersionID, TopicID: c.task.TopicID, Title: c.task.Title, Difficulty: c.task.Difficulty, TaskType: c.task.TaskType, EstimatedMinutes: c.minutes, ReasonCode: c.reason})
-		plan.TotalMinutes += c.minutes
-		used[c.task.ID] = true
-		selectedCount[c.task.TopicID]++
-		if selectedTypeCount[c.task.TopicID] == nil {
-			selectedTypeCount[c.task.TopicID] = make(map[string]int)
-		}
-		selectedTypeCount[c.task.TopicID][c.task.TaskType]++
+		plan.Sessions = append(plan.Sessions, session)
+		plan.TotalPlannedMinutes += session.TotalMinutes
+	}
+	if len(plan.Sessions) > 0 {
+		plan.Items = plan.Sessions[0].Items
+		plan.TotalMinutes = plan.Sessions[0].TotalMinutes
 	}
 	if len(plan.Items) == 0 {
 		warning := "NO_ELIGIBLE_TASKS"
@@ -173,6 +180,10 @@ func Build(ctx context.Context, in Request) (Plan, error) {
 		}
 		plan.Warnings = append(plan.Warnings, warning)
 	}
+	if plan.RequestedSessions > 1 && len(plan.Sessions) < plan.RequestedSessions {
+		plan.Warnings = append(plan.Warnings, "SHORT_HORIZON")
+	}
+	plan.TopicInsights = topicInsights(in, topics, results, accepted, failed, selectedCount)
 	return plan, nil
 }
 
@@ -181,6 +192,9 @@ func Build(ctx context.Context, in Request) (Plan, error) {
 func betterCandidate(a, b candidate, selectedCount map[string]int, selectedTypeCount map[string]map[string]int) bool {
 	if selectedCount[a.task.TopicID] != selectedCount[b.task.TopicID] {
 		return selectedCount[a.task.TopicID] < selectedCount[b.task.TopicID]
+	}
+	if a.priority != b.priority {
+		return a.priority > b.priority
 	}
 	if a.failed != b.failed {
 		return !a.failed

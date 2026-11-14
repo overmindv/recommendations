@@ -11,11 +11,13 @@ func TestValidateGoal(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, input := range map[string]Input{
-		"empty topics":     {Minutes: 60},
-		"duplicate topics": {TopicIDs: []string{valid.TopicIDs[0], valid.TopicIDs[0]}, Minutes: 60},
-		"invalid topic":    {TopicIDs: []string{"other"}, Minutes: 60},
-		"low budget":       {TopicIDs: valid.TopicIDs, Minutes: 9},
-		"high budget":      {TopicIDs: valid.TopicIDs, Minutes: 241},
+		"empty topics":      {Minutes: 60},
+		"duplicate topics":  {TopicIDs: []string{valid.TopicIDs[0], valid.TopicIDs[0]}, Minutes: 60},
+		"invalid topic":     {TopicIDs: []string{"other"}, Minutes: 60},
+		"low budget":        {TopicIDs: valid.TopicIDs, Minutes: 9},
+		"high budget":       {TopicIDs: valid.TopicIDs, Minutes: 241},
+		"negative sessions": {TopicIDs: valid.TopicIDs, Minutes: 60, SessionCount: -1},
+		"too many sessions": {TopicIDs: valid.TopicIDs, Minutes: 60, SessionCount: 9},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := Validate(input); !errors.Is(err, ErrInvalid) {

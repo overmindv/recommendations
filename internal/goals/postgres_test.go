@@ -38,9 +38,16 @@ func TestPostgresGoalLifecycle(t *testing.T) {
 	_ = store.Delete(ctx, other)
 	input := Input{TopicIDs: []string{"00000000-0000-4000-8000-000000000073"}, Minutes: 60}
 	for wantRevision := int64(1); wantRevision <= 2; wantRevision++ {
+		if wantRevision == 2 {
+			input.SessionCount = 8
+		}
 		goal, err := store.Save(ctx, user, input)
-		if err != nil || goal.Revision != wantRevision || goal.Minutes != 60 || !reflect.DeepEqual(goal.TopicIDs, input.TopicIDs) || goal.UpdatedAt.IsZero() {
+		if err != nil || goal.Revision != wantRevision || goal.SessionCount != max(1, input.SessionCount) || goal.Minutes != 60 || !reflect.DeepEqual(goal.TopicIDs, input.TopicIDs) || goal.UpdatedAt.IsZero() {
 			t.Fatalf("save revision %d: %+v %v", wantRevision, goal, err)
+		}
+		loaded, err := store.Get(ctx, user)
+		if err != nil || loaded.SessionCount != goal.SessionCount {
+			t.Fatalf("session count not persisted: %+v %v", loaded, err)
 		}
 	}
 	if goal, err := store.Get(ctx, other); goal.Revision != 0 || !errors.Is(err, ErrNotFound) {

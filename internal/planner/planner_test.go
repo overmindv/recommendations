@@ -35,7 +35,7 @@ func TestColdStartAndBudget(t *testing.T) {
 	in.Tasks = append(in.Tasks, task(102, 1, "hard", "single_choice"), task(103, 1, "easy", "programming"))
 	in.Minutes = 20
 	got := build(t, in)
-	if got.PolicyVersion != "practice-v2" || got.TotalMinutes != 10 || len(got.Items) != 1 || got.Items[0].TaskID != id(101) || got.Items[0].ReasonCode != "START_TOPIC" {
+	if got.PolicyVersion != "practice-v3" || got.TotalMinutes != 10 || len(got.Items) != 1 || got.Items[0].TaskID != id(101) || got.Items[0].ReasonCode != "START_TOPIC" {
 		t.Fatalf("unexpected plan: %+v", got)
 	}
 	if len(got.Warnings) != 0 {

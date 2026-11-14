@@ -39,19 +39,19 @@ func TestHTTPContract(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.PolicyVersion != "practice-v2" || got.TotalMinutes != 10 || len(got.Items) != 1 || got.Items[0].TaskID != "00000000-0000-0000-0000-000000000002" || got.Items[0].TaskVersionID != "00000000-0000-0000-0000-000000000003" || got.Items[0].ReasonCode != "START_TOPIC" || got.Warnings == nil {
+	if got.PolicyVersion != "practice-v3" || got.TotalMinutes != 10 || len(got.Items) != 1 || got.Items[0].TaskID != "00000000-0000-0000-0000-000000000002" || got.Items[0].TaskVersionID != "00000000-0000-0000-0000-000000000003" || got.Items[0].ReasonCode != "START_TOPIC" || got.Warnings == nil {
 		t.Fatalf("contract mismatch: %s", w.Body)
 	}
 	var wire map[string]json.RawMessage
 	if err := json.Unmarshal(w.Body.Bytes(), &wire); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"policy_version", "total_minutes", "warnings", "items"} {
+	for _, key := range []string{"policy_version", "total_minutes", "warnings", "items", "requested_sessions", "total_planned_minutes", "sessions", "topic_insights", "ai_status"} {
 		if _, ok := wire[key]; !ok {
 			t.Fatalf("missing field %s", key)
 		}
 	}
-	if len(wire) != 4 {
+	if len(wire) != 9 {
 		t.Fatalf("unexpected response fields: %s", w.Body)
 	}
 	get := httptest.NewRequest(http.MethodGet, "/v1/practice-plan", nil)

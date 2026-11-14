@@ -12,15 +12,17 @@ var ErrNotFound = errors.New("practice goal not found")
 var ErrInvalid = errors.New("invalid practice goal")
 
 type Goal struct {
-	TopicIDs  []string  `json:"topic_ids"`
-	Minutes   int       `json:"minutes"`
-	Revision  int64     `json:"revision"`
-	UpdatedAt time.Time `json:"updated_at"`
+	TopicIDs     []string  `json:"topic_ids"`
+	Minutes      int       `json:"minutes"`
+	SessionCount int       `json:"session_count"`
+	Revision     int64     `json:"revision"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 type Input struct {
-	TopicIDs []string `json:"topic_ids"`
-	Minutes  int      `json:"minutes"`
+	TopicIDs     []string `json:"topic_ids"`
+	Minutes      int      `json:"minutes"`
+	SessionCount int      `json:"session_count,omitempty"`
 }
 
 type Store interface {
@@ -30,6 +32,9 @@ type Store interface {
 }
 
 func Validate(input Input) error {
+	if input.SessionCount < 0 || input.SessionCount > planner.MaxSessions {
+		return ErrInvalid
+	}
 	if len(input.TopicIDs) < 1 || len(input.TopicIDs) > 5 || input.Minutes < 10 || input.Minutes > 240 {
 		return ErrInvalid
 	}

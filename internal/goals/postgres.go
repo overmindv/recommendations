@@ -17,8 +17,8 @@ func NewPostgres(pool *pgxpool.Pool) *Postgres { return &Postgres{pool: pool} }
 func (p *Postgres) Get(ctx context.Context, userID string) (Goal, error) {
 	var goal Goal
 	var raw []byte
-	err := p.pool.QueryRow(ctx, `SELECT topic_ids, minutes, revision, updated_at FROM practice_goals WHERE user_id = $1`, userID).
-		Scan(&raw, &goal.Minutes, &goal.Revision, &goal.UpdatedAt)
+	err := p.pool.QueryRow(ctx, `SELECT topic_ids, minutes, session_count, revision, updated_at FROM practice_goals WHERE user_id = $1`, userID).
+		Scan(&raw, &goal.Minutes, &goal.SessionCount, &goal.Revision, &goal.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Goal{}, ErrNotFound
 	}
@@ -41,12 +41,12 @@ func (p *Postgres) Save(ctx context.Context, userID string, input Input) (Goal, 
 	}
 	var goal Goal
 	err = p.pool.QueryRow(ctx, `
-		INSERT INTO practice_goals (user_id, topic_ids, minutes)
-		VALUES ($1, $2::jsonb, $3)
+		INSERT INTO practice_goals (user_id, topic_ids, minutes, session_count)
+		VALUES ($1, $2::jsonb, $3, $4)
 		ON CONFLICT (user_id) DO UPDATE SET topic_ids = EXCLUDED.topic_ids, minutes = EXCLUDED.minutes,
-			revision = practice_goals.revision + 1, updated_at = now()
-		RETURNING topic_ids, minutes, revision, updated_at`, userID, raw, input.Minutes).
-		Scan(&raw, &goal.Minutes, &goal.Revision, &goal.UpdatedAt)
+			session_count = EXCLUDED.session_count, revision = practice_goals.revision + 1, updated_at = now()
+		RETURNING topic_ids, minutes, session_count, revision, updated_at`, userID, raw, input.Minutes, max(1, input.SessionCount)).
+		Scan(&raw, &goal.Minutes, &goal.SessionCount, &goal.Revision, &goal.UpdatedAt)
 	if err != nil {
 		return Goal{}, fmt.Errorf("save practice goal: %w", err)
 	}

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/overmindv/recommendations/internal/aiplan"
 	"github.com/overmindv/recommendations/internal/planner"
 )
 
@@ -23,14 +24,17 @@ type publicError struct {
 	Message string `json:"message"`
 }
 
-func Register(router Router, token string) {
-	router.Handle("POST /v1/practice-plan", NewHandler(token))
+func Register(router Router, token string) { RegisterAI(router, token, aiplan.New()) }
+func RegisterAI(router Router, token string, engine *aiplan.Engine) {
+	router.Handle("POST /v1/practice-plan", newHandler(token, engine))
+	router.Handle("POST /v1/learning-outline", outlineHandler(token, engine))
 }
 
 // NewHandler принимает только доверенный actor из аутентифицированного gateway.
-func NewHandler(token string) http.Handler {
+func NewHandler(token string) http.Handler { return newHandler(token, aiplan.New()) }
+func newHandler(token string, engine *aiplan.Engine) http.Handler {
 	expected := sha256.Sum256([]byte(token))
-	endpoint := http.TimeoutHandler(http.HandlerFunc(preview), 3*time.Second, `{"code":"SERVICE_UNAVAILABLE","message":"Service unavailable"}`)
+	endpoint := http.TimeoutHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { preview(w, r, engine) }), 27*time.Second, `{"code":"SERVICE_UNAVAILABLE","message":"Service unavailable"}`)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Type", "application/json")
@@ -50,7 +54,7 @@ func authorized(r *http.Request, token string, expected [32]byte) bool {
 		planner.ValidID(r.Header.Get("X-User-ID"))
 }
 
-func preview(w http.ResponseWriter, r *http.Request) {
+func preview(w http.ResponseWriter, r *http.Request, engine *aiplan.Engine) {
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/json" {
 		writeJSON(w, http.StatusUnsupportedMediaType, publicError{"INVALID_ARGUMENT", "Expected application/json"})
@@ -78,7 +82,7 @@ func preview(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	plan, err := planner.Build(r.Context(), input)
+	plan, err := engine.Build(r.Context(), input, r.Header.Get("X-User-ID"))
 	if errors.Is(err, planner.ErrInvalidInput) {
 		writeJSON(w, http.StatusBadRequest, publicError{"INVALID_ARGUMENT", "Invalid practice plan request"})
 		return

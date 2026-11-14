@@ -16,12 +16,18 @@ func ValidID(value string) bool {
 
 // Validate отвергает неполные графы: отсутствие prerequisite не означает готовность.
 func Validate(in Request) error {
+	if !utf8.ValidString(in.Goal) || utf8.RuneCountInString(in.Goal) > 1000 {
+		return ErrInvalidInput
+	}
+	if in.SessionCount < 0 || in.SessionCount > MaxSessions {
+		return ErrInvalidInput
+	}
 	if len(in.TopicIDs) < 1 || len(in.TopicIDs) > 5 || in.Minutes < 10 || in.Minutes > 240 || len(in.Topics) < 1 || len(in.Topics) > MaxTopics || len(in.Tasks) > MaxTasks || len(in.Evidence) > MaxEvidence {
 		return ErrInvalidInput
 	}
 	topics := make(map[string]Topic, len(in.Topics))
 	for _, topic := range in.Topics {
-		if !ValidID(topic.ID) || len(topic.PrerequisiteIDs) >= MaxTopics {
+		if !utf8.ValidString(topic.Title) || len(topic.Title) > 2000 || !ValidID(topic.ID) || len(topic.PrerequisiteIDs) >= MaxTopics {
 			return ErrInvalidInput
 		}
 		if _, exists := topics[topic.ID]; exists {
