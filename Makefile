@@ -14,6 +14,7 @@ test:
 ctest:
 	@test -n "$${GOALS_TEST_DSN:-}" || (echo "GOALS_TEST_DSN must point to a dedicated test database"; exit 1)
 	go test -race ./internal/goals -run TestPostgresGoalLifecycle -count=1
+	go test -race ./internal/learnergoals -run TestPostgres -count=1
 
 lint: $(GOLANGCI_LINT)
 	$(GOLANGCI_LINT) run
@@ -21,6 +22,7 @@ lint: $(GOLANGCI_LINT)
 
 benchmark:
 	go test ./internal/planner -run '^$$' -bench BenchmarkBuild -benchmem
+	go test ./internal/learnergoals -run '^$$' -bench BenchmarkNormalizeLearnerGoal -benchmem
 
 tidy:
 	go mod tidy
