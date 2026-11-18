@@ -5,6 +5,7 @@ go 1.26.11
 require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/overmindv/parker v0.1.0
+	golang.org/x/sync v0.22.0
 )
 
 require (
@@ -26,7 +27,6 @@ require (
 	github.com/twmb/franz-go v1.21.6 // indirect
 	github.com/twmb/franz-go/pkg/kmsg v1.13.1 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect

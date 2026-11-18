@@ -21,7 +21,7 @@ type command struct {
 }
 
 func executeWrite[T any](ctx context.Context, store *Postgres, actor, requestID string, cmd command,
-	write func(pgx.Tx, time.Time) (T, error)) (T, error) {
+	validate func(context.Context) error, write func(pgx.Tx, time.Time) (T, error)) (T, error) {
 	var result, zero T
 	if !planner.ValidID(actor) || !planner.ValidID(requestID) {
 		return zero, ErrInvalid
@@ -31,37 +31,43 @@ func executeWrite[T any](ctx context.Context, store *Postgres, actor, requestID 
 		return zero, fmt.Errorf("encode learner goal request: %w", err)
 	}
 	digest := sha256.Sum256(payload)
+	if validate != nil {
+		// Проверка каталога не должна держать транзакцию или мешать возврату сохраненного ответа.
+		replay := func() (bool, error) {
+			return readReplay(ctx, store.pool, actor, requestID, store.now().UTC(), digest[:], &result)
+		}
+		if found, err := replay(); found || err != nil {
+			return result, err
+		}
+		if validateErr := validate(ctx); validateErr != nil {
+			if found, err := replay(); found || err != nil {
+				return result, err
+			}
+			return zero, validateErr
+		}
+	}
 	err = pgx.BeginTxFunc(ctx, store.pool, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(tx pgx.Tx) error {
 		// После ожидания блокировки запросы должны увидеть записи предыдущей транзакции.
 		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 198))", actor); err != nil {
 			return err
 		}
 		now := store.now().UTC()
-		var savedHash, savedResponse []byte
-		err := tx.QueryRow(ctx, `
-			SELECT fingerprint, response FROM learner_goal_requests
-			WHERE user_id = $1 AND request_id = $2 AND expires_at > $3`, actor, requestID, now).Scan(&savedHash, &savedResponse)
-		if err == nil {
-			if !bytes.Equal(savedHash, digest[:]) {
-				return ErrRequestUsed
-			}
-			return json.Unmarshal(savedResponse, &result)
-		}
-		if !errors.Is(err, pgx.ErrNoRows) {
+		if found, err := readReplay(ctx, tx, actor, requestID, now, digest[:], &result); found || err != nil {
 			return err
 		}
 		var count int
-		if err = tx.QueryRow(ctx, "SELECT count(*) FROM learner_goal_requests WHERE user_id = $1 AND expires_at > $2", actor, now).
+		if err := tx.QueryRow(ctx, "SELECT count(*) FROM learner_goal_requests WHERE user_id = $1 AND expires_at > $2", actor, now).
 			Scan(&count); err != nil {
 			return err
 		}
 		if count >= maxRequests {
 			return ErrRequestLimit
 		}
-		result, err = write(tx, now)
+		value, err := write(tx, now)
 		if err != nil {
 			return err
 		}
+		result = value
 		response, err := json.Marshal(result)
 		if err != nil {
 			return err
@@ -78,6 +84,23 @@ func executeWrite[T any](ctx context.Context, store *Postgres, actor, requestID 
 		return zero, fmt.Errorf("write learner goal: %w", err)
 	}
 	return result, nil
+}
+
+func readReplay(ctx context.Context, q queryer, actor, requestID string, now time.Time, digest []byte, result any) (bool, error) {
+	var savedHash, savedResponse []byte
+	err := q.QueryRow(ctx, `
+		SELECT fingerprint, response FROM learner_goal_requests
+		WHERE user_id = $1 AND request_id = $2 AND expires_at > $3`, actor, requestID, now).Scan(&savedHash, &savedResponse)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, err
+	case !bytes.Equal(savedHash, digest):
+		return true, ErrRequestUsed
+	default:
+		return true, json.Unmarshal(savedResponse, result)
+	}
 }
 
 // PruneExpiredRequests очищает одну ограниченную партию истекших ключей.

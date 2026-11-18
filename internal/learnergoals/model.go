@@ -3,6 +3,7 @@ package learnergoals
 import (
 	"context"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -23,15 +24,17 @@ const (
 )
 
 var (
-	ErrInvalid      = errors.New("invalid learner goal input")
-	ErrNotFound     = errors.New("learner goal or availability not found")
-	ErrConflict     = errors.New("learner goal or availability version changed")
-	ErrBudget       = errors.New("weekly allocations exceed available minutes")
-	ErrGoalLimit    = errors.New("learner goal limit reached")
-	ErrRequestUsed  = errors.New("request ID already used with different input")
-	ErrRequestLimit = errors.New("learner goal write limit reached")
-	slug            = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
-	template        = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_./:@-]{0,127}$`)
+	ErrInvalid        = errors.New("invalid learner goal input")
+	ErrNotFound       = errors.New("learner goal or availability not found")
+	ErrConflict       = errors.New("learner goal or availability version changed")
+	ErrBudget         = errors.New("weekly allocations exceed available minutes")
+	ErrDeadline       = fmt.Errorf("%w: goal deadline has passed", ErrInvalid)
+	ErrNoAvailability = fmt.Errorf("%w: set learner availability first", ErrNotFound)
+	ErrGoalLimit      = errors.New("learner goal limit reached")
+	ErrRequestUsed    = errors.New("request ID already used with different input")
+	ErrRequestLimit   = errors.New("learner goal write limit reached")
+	slug              = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+	template          = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_./:@-]{0,127}$`)
 )
 
 type AvailabilityInput struct {
@@ -168,8 +171,19 @@ func checkDeadline(in Input, availability Availability, now time.Time) error {
 		return nil
 	}
 	location, err := time.LoadLocation(availability.Timezone)
-	if err != nil || in.Deadline < now.In(location).Format(dateLayout) {
+	if err != nil {
 		return ErrInvalid
 	}
+	if in.Deadline < now.In(location).Format(dateLayout) {
+		return ErrDeadline
+	}
 	return nil
+}
+
+func (goal Goal) DeadlinePassed(now time.Time) bool {
+	if goal.Deadline == "" {
+		return false
+	}
+	location, err := time.LoadLocation(goal.Timezone)
+	return err == nil && goal.Deadline < now.In(location).Format(dateLayout)
 }
