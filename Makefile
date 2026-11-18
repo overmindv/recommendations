@@ -16,6 +16,7 @@ ctest:
 	go test -race ./internal/goals -run TestPostgresGoalLifecycle -count=1
 	go test -race ./internal/learnergoals -run TestPostgres -count=1
 	go test -race ./internal/httpapi -run TestPostgresOnboarding -count=1
+	go test -race ./internal/projection/catalog -run TestPostgres -count=1
 
 lint: $(GOLANGCI_LINT)
 	$(GOLANGCI_LINT) run
