@@ -10,10 +10,11 @@ import (
 )
 
 const (
-	Ready   = "ready"
-	NoTasks = "no_tasks"
-	Skipped = "skipped"
-	Expired = "expired"
+	Ready     = "ready"
+	NoTasks   = "no_tasks"
+	Skipped   = "skipped"
+	Expired   = "expired"
+	Finalized = "finalized"
 )
 
 var (
@@ -22,6 +23,7 @@ var (
 	ErrTaskUnavailable    = errors.New("diagnostic task is no longer available")
 	ErrCatalogUnavailable = errors.New("diagnostic catalog unavailable")
 	ErrBudget             = errors.New("diagnostic budget exceeds goal time")
+	ErrSessionChanged     = errors.New("diagnostic session changed")
 )
 
 type Session struct {
@@ -31,9 +33,11 @@ type Session struct {
 	Status      string `json:"status"`
 	Baseline    string `json:"baseline"`
 	Selection
-	StartedAt time.Time  `json:"started_at"`
-	ExpiresAt time.Time  `json:"expires_at"`
-	SkippedAt *time.Time `json:"skipped_at,omitempty"`
+	StartedAt   time.Time  `json:"started_at"`
+	ExpiresAt   time.Time  `json:"expires_at"`
+	SkippedAt   *time.Time `json:"skipped_at,omitempty"`
+	FinalizedAt *time.Time `json:"finalized_at,omitempty"`
+	Report      *Report    `json:"report,omitempty"`
 }
 
 type Catalog interface {
@@ -113,6 +117,22 @@ func (s *Service) Skip(ctx context.Context, actor, goalID string, version int64)
 		return Session{}, err
 	}
 	return s.present(ctx, session)
+}
+
+func (s *Service) Finalize(ctx context.Context, actor, goalID, sessionID string, version int64, allowPartial bool) (Session, error) {
+	if !planner.ValidID(sessionID) {
+		return Session{}, ErrInvalidSelection
+	}
+	goal, err := s.goalForWrite(ctx, actor, goalID, version)
+	if err != nil {
+		return Session{}, err
+	}
+	session, err := s.store.finalize(ctx, goal, sessionID, allowPartial)
+	if err != nil {
+		return Session{}, err
+	}
+	session.Tasks = []Candidate{}
+	return session, nil
 }
 
 func (s *Service) goalForWrite(ctx context.Context, actor, goalID string, version int64) (learnergoals.Goal, error) {

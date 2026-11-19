@@ -26,7 +26,8 @@ func diagnosticTestID(n int) string {
 	return fmt.Sprintf("00000000-0000-4000-8000-%012x", n)
 }
 
-func TestPostgresDiagnosticSessions(t *testing.T) {
+func diagnosticPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
 	dsn := os.Getenv("DIAGNOSTIC_TEST_DSN")
 	if dsn == "" {
 		t.Skip("DIAGNOSTIC_TEST_DSN is required")
@@ -40,15 +41,24 @@ func TestPostgresDiagnosticSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+func diagnosticIDs(t *testing.T) func(int) string {
+	t.Helper()
 	var namespace [8]byte
 	if _, err := rand.Read(namespace[:]); err != nil {
 		t.Fatal(err)
 	}
 	namespace[6] = namespace[6]&0x3f | 0x80
-	id := func(n int) string {
+	return func(n int) string {
 		return fmt.Sprintf("%x-%x-4000-%x-%012x", namespace[:4], namespace[4:6], namespace[6:], n)
 	}
+}
+
+func TestPostgresDiagnosticSessions(t *testing.T) {
+	ctx, pool, id := t.Context(), diagnosticPool(t), diagnosticIDs(t)
 	actor, peer := id(1), id(2)
 	target, prerequisite, empty, inactive := id(3), id(4), id(5), id(6)
 	goal, scarce, expired, skipFirst, fresh := id(7), id(8), id(9), id(10), id(14)
