@@ -19,6 +19,7 @@ import (
 	catalogprojection "github.com/overmindv/recommendations/internal/projection/catalog"
 	"github.com/overmindv/recommendations/internal/projection/resources"
 	"github.com/overmindv/recommendations/internal/savedplans"
+	"github.com/overmindv/recommendations/internal/studyplans"
 	"github.com/overmindv/recommendations/internal/topiccatalog"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -81,6 +82,7 @@ func run() int {
 		var sessions *diagnostic.Service
 		var baselines *mastery.Postgres
 		var retention *mastery.Retention
+		var studyService httpapi.StudyPlans
 		if source != nil && app.Config().DatabaseURL == "" {
 			return errors.New("catalog projection requires DATABASE_URL")
 		}
@@ -136,6 +138,11 @@ func run() int {
 				worker := consumer.NewWorker(consumer.NewPostgres(pool), cfg.Evidence.ContentTopic, app.Logger(), options...)
 				app.AddRunnable("learning-evidence", worker.Run)
 			}
+			if cfg.StudyPlans != nil {
+				planSource := resources.NewStudySource(verified, cfg.StudyPlans.Recent)
+				builder := studyplans.NewProjectedBuilder(pool, planSource, cfg.StudyPlans.Ranking, *cfg.Mastery)
+				studyService = studyplans.NewService(studyplans.NewPostgres(pool), builder)
+			}
 		}
 		httpapi.RegisterVerifiedAI(app.HTTP(), cfg.ServiceToken, engine, eligibility)
 		httpapi.RegisterGoals(app.HTTP(), cfg.ServiceToken, store)
@@ -144,6 +151,7 @@ func run() int {
 		httpapi.RegisterDiagnostic(app.HTTP(), cfg.ServiceToken, sessions)
 		httpapi.RegisterMastery(app.HTTP(), cfg.ServiceToken, baselines)
 		httpapi.RegisterRetention(app.HTTP(), cfg.ServiceToken, retention)
+		httpapi.RegisterStudyPlans(app.HTTP(), cfg.ServiceToken, studyService)
 		return nil
 	}, parker.WithAppName("recommendations"), func(o *parker.Options) { o.HTTPAddress = cfg.HTTPAddress; o.WriteTimeout = 35 * time.Second })
 }

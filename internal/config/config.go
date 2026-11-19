@@ -20,6 +20,7 @@ type Config struct {
 	Evidence             Evidence
 	Mastery              *mastery.Policy
 	RetentionInterval    time.Duration
+	StudyPlans           *StudyPlans
 }
 
 func Load() (Config, error) {
@@ -63,6 +64,10 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	c.RetentionInterval, err = loadRetention(c)
+	if err != nil {
+		return Config{}, err
+	}
+	c.StudyPlans, err = loadStudyPlans(c)
 	if err != nil {
 		return Config{}, err
 	}

@@ -20,6 +20,11 @@ type command struct {
 	Body      any    `json:"body,omitempty"`
 }
 
+func LockBudget(ctx context.Context, tx pgx.Tx, actor string) error {
+	_, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 198))", actor)
+	return err
+}
+
 func executeWrite[T any](ctx context.Context, store *Postgres, actor, requestID string, cmd command,
 	validate func(context.Context) error, write func(pgx.Tx, time.Time) (T, error)) (T, error) {
 	var result, zero T
@@ -48,7 +53,7 @@ func executeWrite[T any](ctx context.Context, store *Postgres, actor, requestID 
 	}
 	err = pgx.BeginTxFunc(ctx, store.pool, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(tx pgx.Tx) error {
 		// После ожидания блокировки запросы должны увидеть записи предыдущей транзакции.
-		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 198))", actor); err != nil {
+		if err := LockBudget(ctx, tx, actor); err != nil {
 			return err
 		}
 		now := store.now().UTC()
