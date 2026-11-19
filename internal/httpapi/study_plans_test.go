@@ -13,6 +13,7 @@ import (
 type studyRouteStub struct {
 	actor, goal string
 	generation  studyplans.Generation
+	feedback    studyplans.Feedback
 	version     int64
 	last        string
 	step        int
@@ -27,6 +28,14 @@ func (s *studyRouteStub) Current(_ context.Context, actor, goal string) (studypl
 func (s *studyRouteStub) Explain(_ context.Context, actor, goal string, version int64) (studyplans.Explanation, error) {
 	s.actor, s.goal, s.last, s.version = actor, goal, "explain", version
 	return studyplans.Explanation{PlanVersion: version}, s.err
+}
+
+func (s *studyRouteStub) SubmitFeedback(_ context.Context, actor, goal string, input studyplans.Feedback) (studyplans.FeedbackReceipt, error) {
+	s.actor, s.goal, s.last, s.feedback = actor, goal, "feedback", input
+	if err := input.Validate(actor, goal); err != nil {
+		return studyplans.FeedbackReceipt{}, err
+	}
+	return studyplans.FeedbackReceipt{RequestID: input.RequestID, PlanVersion: input.PlanVersion, Action: input.Action}, s.err
 }
 
 func (s *studyRouteStub) Generate(_ context.Context, actor, goal string, generation studyplans.Generation) (studyplans.View, error) {
@@ -80,6 +89,9 @@ func TestStudyPlanRoutesAcceptOnlyVersionAndTrustedActor(t *testing.T) {
 		{send("GET", "/explanation?plan_version=1&plan_version=2", token, ""), http.StatusBadRequest},
 		{send("GET", "/explanation?plan_version=1&actor=other", token, ""), http.StatusBadRequest},
 		{send("GET", "/explanation?plan_version=0", token, ""), http.StatusBadRequest},
+		{send("POST", "/feedback", "wrong", `{"plan_version":1,"action":"pause"}`, key), http.StatusForbidden},
+		{send("POST", "/feedback", token, `{"plan_version":1,"action":"pause"}`), http.StatusBadRequest},
+		{send("POST", "/feedback", token, `{"plan_version":1,"action":"pause","actor":"other"}`, key), http.StatusBadRequest},
 		{send("PUT", "", token, body), http.StatusBadRequest},
 		{send("PUT", "", token, body, key, key), http.StatusBadRequest},
 		{send("PUT", "", token, `{"goal_version":1,"availability_version":2}`, key), http.StatusBadRequest},
@@ -114,6 +126,11 @@ func TestStudyPlanRoutesAcceptOnlyVersionAndTrustedActor(t *testing.T) {
 	if res := send("PUT", "/steps/2/activity", token, `{"plan_version":1}`); res.Code != http.StatusOK ||
 		service.step != 2 || service.version != 1 || service.last != "activity" {
 		t.Fatal("activity was routed incorrectly:", res.Code, service)
+	}
+	if res := send("POST", "/feedback", token, `{"plan_version":1,"action":"skip","ordinal":2}`, key); res.Code != http.StatusAccepted ||
+		res.Header().Get("Cache-Control") != "no-store" || service.last != "feedback" || service.actor != actor ||
+		service.feedback.PlanVersion != 1 || service.feedback.Action != studyplans.FeedbackSkip || service.feedback.RequestID != key {
+		t.Fatal("feedback was routed incorrectly:", res.Code, service)
 	}
 	service.err = studyplans.ErrPending
 	if res := send("PUT", "/steps/3/assessment", token, `{"plan_version":1}`); res.Code != http.StatusConflict ||

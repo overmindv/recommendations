@@ -16,6 +16,7 @@ import (
 type StudyPlans interface {
 	Current(context.Context, string, string) (studyplans.View, error)
 	Explain(context.Context, string, string, int64) (studyplans.Explanation, error)
+	SubmitFeedback(context.Context, string, string, studyplans.Feedback) (studyplans.FeedbackReceipt, error)
 	Generate(context.Context, string, string, studyplans.Generation) (studyplans.View, error)
 	StartActivity(context.Context, string, string, int64, int) (studyplans.View, error)
 	CompleteActivity(context.Context, string, string, int64, int) (studyplans.View, error)
@@ -59,6 +60,30 @@ func RegisterStudyPlans(router Router, token string, service StudyPlans) {
 		}
 		value, err := service.Explain(r.Context(), r.Header.Get("X-User-ID"), r.PathValue("id"), version)
 		respondStudyPlan(w, value, err)
+	})
+	handle("POST "+route+"/feedback", func(w http.ResponseWriter, r *http.Request) {
+		keys := r.Header.Values("Idempotency-Key")
+		if len(keys) != 1 || !planner.ValidID(keys[0]) {
+			respondStudyPlan(w, nil, studyplans.ErrInvalid)
+			return
+		}
+		var input struct {
+			PlanVersion   int64                     `json:"plan_version"`
+			Action        studyplans.FeedbackAction `json:"action"`
+			Ordinal       *int                      `json:"ordinal"`
+			WeeklyMinutes *int                      `json:"weekly_minutes"`
+		}
+		if !decodeOnboarding(w, r, &input) {
+			return
+		}
+		receipt, err := service.SubmitFeedback(r.Context(), r.Header.Get("X-User-ID"), r.PathValue("id"), studyplans.Feedback{
+			RequestID: keys[0], PlanVersion: input.PlanVersion, Action: input.Action, Ordinal: input.Ordinal, WeeklyMinutes: input.WeeklyMinutes,
+		})
+		if err != nil {
+			respondStudyPlan(w, nil, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, receipt)
 	})
 	handle("PUT "+route, func(w http.ResponseWriter, r *http.Request) {
 		keys := r.Header.Values("Idempotency-Key")
@@ -129,6 +154,10 @@ func respondStudyPlan(w http.ResponseWriter, view any, err error) {
 		writeJSON(w, http.StatusConflict, publicError{"GRADE_PENDING", "Independent grade is not available"})
 	case errors.Is(err, studyplans.ErrLimit):
 		writeJSON(w, http.StatusConflict, publicError{"PLAN_LIMIT", "Plan version limit reached"})
+	case errors.Is(err, studyplans.ErrBudget):
+		writeJSON(w, http.StatusConflict, publicError{"BUDGET_EXCEEDED", "Weekly allocations exceed available minutes"})
+	case errors.Is(err, studyplans.ErrFeedbackLimit):
+		writeJSON(w, http.StatusTooManyRequests, publicError{"WRITE_LIMIT", "Write limit reached"})
 	default:
 		writeJSON(w, http.StatusServiceUnavailable, publicError{"SERVICE_UNAVAILABLE", "Service unavailable"})
 	}

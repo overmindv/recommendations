@@ -42,6 +42,9 @@ func protectedSteps(view View) []protectedStep {
 	var steps []protectedStep
 	for _, week := range view.Weeks {
 		for _, item := range week.Items {
+			if item.Skipped {
+				continue
+			}
 			if item.ActivityStarted != nil || item.ActivityDone != nil || item.hasReceipt || item.observedGrade {
 				steps = append(steps, protectedStep{item: item, from: week.From, through: week.Through})
 			}

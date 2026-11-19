@@ -35,6 +35,7 @@ type LearningRequest struct {
 	AllowedLanguages []string
 	Budget           StudyBudget
 	Ranking          ranking.Policy
+	DifficultyHints  map[string]int
 }
 
 type StudyItem struct {
@@ -60,6 +61,7 @@ type StudyAlternative struct {
 type LearningContinuation struct {
 	Weeks    []LearningWeek
 	Remedial map[string]bool
+	Rebudget bool
 }
 
 type LearningWeek struct {
@@ -173,11 +175,16 @@ type studyGraph struct {
 func learningGraph(request LearningRequest) (studyGraph, error) {
 	if !request.Ranking.Valid() || len(request.TargetTopicIDs) < 1 || len(request.TargetTopicIDs) > maxLearningTargetTopics ||
 		len(request.Topics) > ranking.MaxTopics || len(request.Resources) > ranking.MaxCandidates ||
-		len(request.AllowedLanguages) > 16 {
+		len(request.AllowedLanguages) > 16 || len(request.DifficultyHints) > ranking.MaxTopics {
 		return studyGraph{}, ErrInvalidInput
 	}
 	for _, language := range request.AllowedLanguages {
 		if len(language) == 0 || len(language) > 32 {
+			return studyGraph{}, ErrInvalidInput
+		}
+	}
+	for id, hint := range request.DifficultyHints {
+		if !ValidID(id) || (hint != -1 && hint != 1) {
 			return studyGraph{}, ErrInvalidInput
 		}
 	}

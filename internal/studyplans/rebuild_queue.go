@@ -106,7 +106,7 @@ func (p *Postgres) LoadRebuild(ctx context.Context, job RebuildJob) (RebuildBase
 		if err != nil {
 			return err
 		}
-		if view.Stale {
+		if !canRebuild(source, view) {
 			return ErrStaleRebuild
 		}
 		if err := observeNextCheck(ctx, tx, job.Actor, &view); err != nil {
@@ -131,13 +131,7 @@ func (p *Postgres) CommitRebuild(ctx context.Context, job RebuildJob, base Rebui
 			return err
 		}
 		// Прием оценок тоже блокирует цель до записи в очередь.
-		var locked bool
-		err := tx.QueryRow(ctx, `SELECT true FROM learner_goals WHERE id=$1 AND user_id=$2 FOR UPDATE`,
-			job.GoalID, job.Actor).Scan(&locked)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
-		}
-		if err != nil {
+		if err := lockPlanGoal(ctx, tx, job.Actor, job.GoalID); err != nil {
 			return err
 		}
 		if err := checkRebuildLease(ctx, tx, job, true); err != nil {
@@ -147,7 +141,8 @@ func (p *Postgres) CommitRebuild(ctx context.Context, job RebuildJob, base Rebui
 		if err != nil {
 			return err
 		}
-		if current.Expected != base.Source.Expected || current.Budget.ReservedMinutes != base.Source.Budget.ReservedMinutes || !current.Active {
+		if current.Expected != base.Source.Expected || current.Budget.ReservedMinutes != base.Source.Budget.ReservedMinutes ||
+			current.feedbackRevision != base.Source.feedbackRevision || !current.Active {
 			return ErrConflict
 		}
 		view, err := readView(ctx, tx, job.GoalID, current.PlanVersion, current)
@@ -157,7 +152,7 @@ func (p *Postgres) CommitRebuild(ctx context.Context, job RebuildJob, base Rebui
 		if err := observeNextCheck(ctx, tx, job.Actor, &view); err != nil {
 			return err
 		}
-		if view.Stale || !sameProtected(view, base.Plan) {
+		if !canRebuild(current, view) || !sameProtected(view, base.Plan) {
 			return ErrConflict
 		}
 		if draft != nil {
@@ -171,6 +166,15 @@ func (p *Postgres) CommitRebuild(ctx context.Context, job RebuildJob, base Rebui
 		return fmt.Errorf("commit study rebuild: %w", err)
 	}
 	return nil
+}
+
+func canRebuild(source Sources, view View) bool {
+	return source.Active && source.pausedAt == nil && (!view.Stale || source.approvedBudgetChange(view))
+}
+
+func (s Sources) approvedBudgetChange(view View) bool {
+	return s.budgetFromPlan == view.Version && s.budgetGoalVersion == s.GoalVersion &&
+		s.AvailabilityVersion == view.AvailabilityVersion && s.GoalVersion > view.GoalVersion
 }
 
 type rebuildExecutor interface {

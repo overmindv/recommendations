@@ -304,4 +304,17 @@ func TestPostgresStudyPlanThroughOwners(t *testing.T) {
 		withdrawn.UnmetOutcomes[0].Stage != planner.StudyCheck || withdrawn.UnmetOutcomes[0].Reason != "missing_resource" {
 		t.Fatal("withdrawn retention version was silently replaced:", withdrawn)
 	}
+	const pause = `{"plan_version":3,"action":"pause"}`
+	request("POST", "/feedback", peer, pause, id(70), http.StatusNotFound)
+	request("POST", "/feedback", actor, `{"plan_version":2,"action":"pause"}`, id(70), http.StatusConflict)
+	accepted := request("POST", "/feedback", actor, pause, id(70), http.StatusAccepted)
+	repeated := request("POST", "/feedback", actor, pause, id(70), http.StatusAccepted)
+	if accepted.Body.String() != repeated.Body.String() || accepted.Header().Get("Cache-Control") != "no-store" {
+		t.Fatal("feedback replay changed the receipt")
+	}
+	paused := send("GET", "", actor, "", "", http.StatusOK)
+	if paused.PausedAt == nil || paused.BlockedReason != "paused" {
+		t.Fatal("pause was not reflected in the current plan")
+	}
+	request("POST", "/feedback", actor, `{"plan_version":3,"action":"resume"}`, id(71), http.StatusAccepted)
 }

@@ -59,7 +59,7 @@ func (p *Postgres) updateProgress(ctx context.Context, actor, goal string, versi
 		if item == nil {
 			return ErrNotFound
 		}
-		if item.Superseded {
+		if item.Superseded || item.Skipped {
 			return ErrStepBlocked
 		}
 		check := item.Stage == planner.StudyCheck
@@ -220,10 +220,18 @@ func describeProgress(ctx context.Context, tx pgx.Tx, actor string, view *View, 
 			view.GoalDemonstrated = false
 		}
 	}
+	if view.PausedAt != nil {
+		view.BlockedReason = "paused"
+		return nil
+	}
 	if len(pending) == 0 {
 		return nil
 	}
 	next := pending[0]
+	if next.Skipped {
+		view.BlockedReason = "replanning"
+		return nil
+	}
 	if next.Assessment != nil && next.Assessment.Verdict != "accepted" {
 		view.BlockedReason = "check_failed"
 		return nil
@@ -233,7 +241,11 @@ func describeProgress(ctx context.Context, tx pgx.Tx, actor string, view *View, 
 	}
 	if slices.ContainsFunc(next.RequiresCheck, func(topic string) bool { return !passes(topic) }) {
 		if repair := prerequisiteRepair(pending, passes); repair != nil {
-			view.NextStep = new(repair.Ordinal)
+			if repair.Skipped {
+				view.BlockedReason = "replanning"
+			} else {
+				view.NextStep = new(repair.Ordinal)
+			}
 		} else {
 			view.BlockedReason = "unverified_prerequisite"
 		}

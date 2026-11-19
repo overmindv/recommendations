@@ -81,7 +81,7 @@ func allocateStudy(ctx context.Context, request LearningRequest, graph studyGrap
 	}
 	allocator := studyAllocator{request: request, weeks: plan.Weeks, used: make(map[studyResourceID]bool)}
 	if previous != nil {
-		if err := allocator.preserve(calendar, previous.Weeks); err != nil {
+		if err := allocator.preserve(calendar, previous.Weeks, previous.Rebudget); err != nil {
 			return LearningPlan{}, nil, err
 		}
 		plan.Weeks = allocator.weeks
@@ -252,6 +252,9 @@ func (a *studyAllocator) pick(ctx context.Context, id string, knowledge *ranking
 		Topics:           map[string]ranking.Topic{id: {Knowledge: knowledge}},
 		AllowedLanguages: a.request.AllowedLanguages, Limit: limit,
 		Candidates: make([]ranking.Candidate, 0, len(usable)),
+	}
+	if stage == StudyPractice {
+		request.DifficultyShift = a.request.DifficultyHints[id]
 	}
 	largestRejected := -1
 	for i := from; i < len(a.weeks); i++ {

@@ -36,11 +36,13 @@ const impactSQL = `
 const rebuildSQL = `
 	INSERT INTO study_plan_rebuilds AS q (goal_id,first_requested_at,requested_at,available_at)
 	SELECT h.goal_id,statement_timestamp(),statement_timestamp(),statement_timestamp()+$2::bigint*interval '1 microsecond'
-	FROM study_plan_heads AS h WHERE h.goal_id=ANY($1::uuid[]) ORDER BY h.goal_id
+	FROM study_plan_heads AS h
+	LEFT JOIN study_plan_feedback_state AS f ON f.goal_id=h.goal_id
+	WHERE h.goal_id=ANY($1::uuid[]) AND f.paused_at IS NULL ORDER BY h.goal_id
 	ON CONFLICT (goal_id) DO UPDATE SET revision=q.revision+1,
 	    requested_at=GREATEST(q.requested_at,EXCLUDED.requested_at),
-	    available_at=LEAST(q.first_requested_at+4*$2::bigint*interval '1 microsecond',
-	                      GREATEST(q.available_at,EXCLUDED.available_at))`
+	    available_at=CASE WHEN q.priority THEN q.available_at ELSE
+	        LEAST(q.first_requested_at+4*$2::bigint*interval '1 microsecond', GREATEST(q.available_at,EXCLUDED.available_at)) END`
 
 func updateLearningPlans(ctx context.Context, tx pgx.Tx, submissions []string, delay time.Duration, baselines *mastery.Postgres) error {
 	rows, err := tx.Query(ctx, impactSQL, submissions)

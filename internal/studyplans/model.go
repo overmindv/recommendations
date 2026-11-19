@@ -14,13 +14,15 @@ import (
 const MaxVersionsPerGoal = 1024
 
 var (
-	ErrInvalid     = errors.New("invalid study plan request")
-	ErrNotFound    = errors.New("study plan or goal not found")
-	ErrConflict    = errors.New("study plan inputs changed")
-	ErrRequestUsed = errors.New("study plan request key already used")
-	ErrLimit       = errors.New("study plan version limit reached")
-	ErrStepBlocked = errors.New("study plan step is not actionable")
-	ErrPending     = errors.New("independent grade is not available")
+	ErrInvalid       = errors.New("invalid study plan request")
+	ErrNotFound      = errors.New("study plan or goal not found")
+	ErrConflict      = errors.New("study plan inputs changed")
+	ErrRequestUsed   = errors.New("study plan request key already used")
+	ErrLimit         = errors.New("study plan version limit reached")
+	ErrStepBlocked   = errors.New("study plan step is not actionable")
+	ErrPending       = errors.New("independent grade is not available")
+	ErrFeedbackLimit = errors.New("study plan feedback limit reached")
+	ErrBudget        = errors.New("study plan budget exceeds available minutes")
 )
 
 type Expected struct {
@@ -49,11 +51,15 @@ func (g Generation) digest() [32]byte {
 
 type Sources struct {
 	Expected
-	TargetTopics     []string
-	AllowedLanguages []string
-	Budget           planner.StudyBudget
-	Active           bool
-	actor            string
+	TargetTopics      []string
+	AllowedLanguages  []string
+	Budget            planner.StudyBudget
+	Active            bool
+	actor             string
+	feedbackRevision  int64
+	pausedAt          *time.Time
+	budgetFromPlan    int64
+	budgetGoalVersion int64
 }
 
 type Draft struct {
@@ -77,6 +83,7 @@ type Item struct {
 	ActivityDone    *time.Time  `json:"activity_completed_at,omitempty"`
 	Assessment      *Assessment `json:"assessment,omitempty"`
 	evidenceSince   time.Time
+	Skipped         bool `json:"skipped,omitempty"`
 	hasReceipt      bool
 	observedGrade   bool
 }
@@ -111,6 +118,7 @@ type View struct {
 	Suggestions         []planner.ScopeSuggestion `json:"suggestions"`
 	Current             bool                      `json:"current"`
 	Stale               bool                      `json:"stale"`
+	PausedAt            *time.Time                `json:"paused_at,omitempty"`
 	NextStep            *int                      `json:"next_step"`
 	BlockedReason       string                    `json:"blocked_reason,omitempty"`
 	GoalDemonstrated    bool                      `json:"goal_demonstrated"`
