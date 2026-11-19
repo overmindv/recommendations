@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/overmindv/recommendations/internal/planner"
 )
 
@@ -28,22 +30,24 @@ func (s *Store) applyTasks(ctx context.Context, expected checkpoint, page Change
 	if page.More && (len(page.Events) == 0 || last != page.Through) {
 		return errInvalidPage
 	}
-	if page.Through == expected.Through && len(page.Events) == 0 && expected.ReplayCeiling == nil {
-		return nil
+	if page.Through == expected.Through && len(page.Events) == 0 && expected.ReplayCeiling == nil && !expected.Lagging {
+		return touchProjection(ctx, s.pool, expected, 0)
 	}
 	return s.write(ctx, expected, func(tx pgx.Tx, current *checkpoint) error {
 		if err := applyEvents(ctx, tx, *current, page.Events); err != nil {
 			return err
 		}
 		current.Through, current.ReplayCeiling = page.Through, nil
+		current.Lagging = page.More
 		if page.More {
 			current.ReplayCeiling = &page.Watermark
+			return nil
 		}
-		return nil
+		return touchProjection(ctx, tx, *current, 0)
 	})
 }
 
-func (s *Store) applyContent(ctx context.Context, expected checkpoint, next KafkaPosition, events []Event) error {
+func (s *Store) applyContent(ctx context.Context, expected checkpoint, next KafkaPosition, events []Event, observedAt time.Time) error {
 	if expected.Origin != Content || expected.Active == 0 || expected.Pending != 0 || expected.Kafka == nil {
 		return errNotReady
 	}
@@ -55,19 +59,44 @@ func (s *Store) applyContent(ctx context.Context, expected checkpoint, next Kafk
 			return errInvalidPage
 		}
 	}
-	if maps.Equal(next.Offsets, expected.Kafka.Offsets) {
-		if len(events) > 0 {
+	same := maps.Equal(next.Offsets, expected.Kafka.Offsets)
+	lagging := observedAt.IsZero()
+	if same {
+		if len(events) != 0 {
 			return errInvalidPage
 		}
-		return nil
+		if expected.Lagging == lagging {
+			if lagging {
+				return nil
+			}
+			return touchProjection(ctx, s.pool, expected, time.Since(observedAt))
+		}
 	}
 	return s.write(ctx, expected, func(tx pgx.Tx, current *checkpoint) error {
 		if err := applyEvents(ctx, tx, *current, events); err != nil {
 			return err
 		}
 		current.Kafka = &next
+		current.Lagging = lagging
+		if !lagging {
+			return touchProjection(ctx, tx, *current, time.Since(observedAt))
+		}
 		return nil
 	})
+}
+
+type projectionExecer interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+
+func touchProjection(ctx context.Context, writer projectionExecer, st checkpoint, age time.Duration) error {
+	_, err := writer.Exec(ctx, `
+		UPDATE resource_projection_checkpoints
+		SET last_synced_at=statement_timestamp()-$3::bigint*interval '1 microsecond'
+		WHERE origin=$1 AND revision=$2 AND (last_synced_at IS NULL OR
+		    last_synced_at<statement_timestamp()-$3::bigint*interval '1 microsecond'-interval '5 seconds')`,
+		st.Origin, st.Revision, max(0, age.Microseconds()))
+	return err
 }
 
 type eventIdentity struct {

@@ -17,6 +17,7 @@ type StudyPlans struct {
 	Recent           time.Duration
 	AdaptationWindow time.Duration
 	CompletionEvents bool
+	ProjectionMaxAge time.Duration
 }
 
 func loadStudyPlans(cfg Config) (*StudyPlans, error) {
@@ -65,7 +66,14 @@ func loadStudyPlans(cfg Config) (*StudyPlans, error) {
 	if err != nil || recent < time.Hour || recent > 30*24*time.Hour || recent%time.Second != 0 {
 		return nil, errors.New("study recent window must be a duration from 1h to 720h in whole seconds")
 	}
-	study := &StudyPlans{Ranking: policy, Recent: recent, CompletionEvents: completion}
+	maxAge := 90 * time.Second
+	if raw := strings.TrimSpace(os.Getenv("RECOMMENDATIONS_STUDY_PROJECTION_MAX_AGE")); raw != "" {
+		maxAge, err = time.ParseDuration(raw)
+		if err != nil || maxAge < time.Minute || maxAge > 15*time.Minute || maxAge%time.Second != 0 {
+			return nil, errors.New("study projection age must be a duration from 1m to 15m in whole seconds")
+		}
+	}
+	study := &StudyPlans{Ranking: policy, Recent: recent, CompletionEvents: completion, ProjectionMaxAge: maxAge}
 	if adaptive {
 		window, err := time.ParseDuration(strings.TrimSpace(os.Getenv("RECOMMENDATIONS_STUDY_ADAPTATION_WINDOW")))
 		if err != nil || window < time.Second || window > 5*time.Minute || window%time.Second != 0 {

@@ -21,11 +21,14 @@ func (b *ProjectedBuilder) Rebuild(ctx context.Context, base RebuildBase) (*Draf
 		return nil, err
 	}
 	scope := slices.Sorted(maps.Keys(input.Topics))
-	if !observed && !keep.Rebudget && (len(before.scopeTopics) == 0 || slices.Equal(before.scopeTopics, scope)) && sameSchedule(before, plan) {
+	guide := studyGuidance(base.Source.TemplateVersion, evidence.Topics)
+	guidanceChanged := before.Guidance != nil && *before.Guidance != guide
+	if !observed && !keep.Rebudget && !guidanceChanged &&
+		(len(before.scopeTopics) == 0 || slices.Equal(before.scopeTopics, scope)) && sameSchedule(before, plan) {
 		return nil, nil
 	}
 	return &Draft{Plan: plan, EvidenceWatermark: evidence.Watermark, EvidencePolicy: before.EvidencePolicy, ScopeTopics: scope,
-		EvidenceTopics: evidence.Topics, EvidenceCaptured: now}, nil
+		EvidenceTopics: evidence.Topics, EvidenceCaptured: now, Guidance: &guide}, nil
 }
 
 func continuation(view View) (planner.LearningContinuation, bool) {

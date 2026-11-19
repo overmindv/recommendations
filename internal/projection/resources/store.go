@@ -33,6 +33,7 @@ type checkpointProgress struct {
 	Through       int64          `json:"through,omitempty"`
 	ReplayCeiling *int64         `json:"replay_ceiling,omitempty"`
 	Kafka         *KafkaPosition `json:"kafka,omitempty"`
+	Lagging       bool           `json:"lagging,omitempty"`
 }
 
 type checkpoint struct {
@@ -98,7 +99,7 @@ func (s *Store) beginSnapshot(ctx context.Context, expected checkpoint, position
 		if err := retireGeneration(ctx, tx, current.Origin, current.Pending); err != nil {
 			return err
 		}
-		current.checkpointProgress = checkpointProgress{Pending: current.Revision + 1, Kafka: position}
+		current.checkpointProgress = checkpointProgress{Pending: current.Revision + 1, Kafka: position, Lagging: true}
 		return nil
 	})
 }

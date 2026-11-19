@@ -13,9 +13,18 @@ type Template struct {
 	SuggestsDeadline bool   `json:"suggests_deadline"`
 }
 
+const defaultStudyTemplate = "practice:1"
+
 var templates = [...]Template{
 	{Version: "exam:1", Title: "Подготовиться к экзамену", SuggestsDeadline: true},
-	{Version: "practice:1", Title: "Закрепить темы на практике"},
+	{Version: defaultStudyTemplate, Title: "Закрепить темы на практике"},
+}
+
+func StudyTemplateVersion(version string) string {
+	if version != "" && ValidateTemplate(version) == nil {
+		return version
+	}
+	return defaultStudyTemplate
 }
 
 func Templates() []Template { return slices.Clone(templates[:]) }

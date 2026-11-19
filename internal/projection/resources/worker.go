@@ -20,6 +20,7 @@ type taskSource interface {
 type materialStream interface {
 	Start(context.Context) (KafkaPosition, error)
 	Read(context.Context, KafkaPosition) (KafkaPosition, []Event, error)
+	VerifiedAt(KafkaPosition) time.Time
 }
 
 type Worker struct {
@@ -124,7 +125,7 @@ func (w *Worker) replayContent(ctx context.Context, current checkpoint) (bool, e
 	if err != nil {
 		return false, err
 	}
-	err = w.store.applyContent(ctx, current, next, events)
+	err = w.store.applyContent(ctx, current, next, events, w.stream.VerifiedAt(next))
 	if errors.Is(err, errEventConflict) {
 		return false, w.restart(ctx, current, resourceFailure(err))
 	}

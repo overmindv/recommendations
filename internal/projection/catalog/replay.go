@@ -38,6 +38,10 @@ func (s *Store) ApplyChanges(ctx context.Context, expected State, page ChangePag
 		st.ReplayWatermark = nil
 		if page.More {
 			st.ReplayWatermark = &w
+		} else if _, err := tx.Exec(ctx, `
+			UPDATE catalog_projection_state SET last_synced_at=statement_timestamp()
+			WHERE singleton AND (last_synced_at IS NULL OR last_synced_at<statement_timestamp()-interval '5 seconds')`); err != nil {
+			return false, err
 		}
 		return next, nil
 	})
