@@ -24,6 +24,11 @@ func (s *studyRouteStub) Current(_ context.Context, actor, goal string) (studypl
 	return studyplans.View{GoalID: goal, Version: 1, NextStep: new(2)}, s.err
 }
 
+func (s *studyRouteStub) Explain(_ context.Context, actor, goal string, version int64) (studyplans.Explanation, error) {
+	s.actor, s.goal, s.last, s.version = actor, goal, "explain", version
+	return studyplans.Explanation{PlanVersion: version}, s.err
+}
+
 func (s *studyRouteStub) Generate(_ context.Context, actor, goal string, generation studyplans.Generation) (studyplans.View, error) {
 	s.actor, s.goal, s.last, s.generation = actor, goal, "generate", generation
 	return studyplans.View{GoalID: goal, Version: 1}, s.err
@@ -70,6 +75,11 @@ func TestStudyPlanRoutesAcceptOnlyVersionAndTrustedActor(t *testing.T) {
 		status   int
 	}{
 		{send("GET", "", "wrong", ""), http.StatusForbidden},
+		{send("GET", "/explanation?plan_version=1", "wrong", ""), http.StatusForbidden},
+		{send("GET", "/explanation", token, ""), http.StatusBadRequest},
+		{send("GET", "/explanation?plan_version=1&plan_version=2", token, ""), http.StatusBadRequest},
+		{send("GET", "/explanation?plan_version=1&actor=other", token, ""), http.StatusBadRequest},
+		{send("GET", "/explanation?plan_version=0", token, ""), http.StatusBadRequest},
 		{send("PUT", "", token, body), http.StatusBadRequest},
 		{send("PUT", "", token, body, key, key), http.StatusBadRequest},
 		{send("PUT", "", token, `{"goal_version":1,"availability_version":2}`, key), http.StatusBadRequest},
@@ -91,6 +101,11 @@ func TestStudyPlanRoutesAcceptOnlyVersionAndTrustedActor(t *testing.T) {
 	}
 	if res := send("GET", "", token, ""); res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"next_step":2`) {
 		t.Fatal("current plan did not include next step:", res.Code, res.Body.String())
+	}
+	if res := send("GET", "/explanation?plan_version=1", token, `{"actor":"other"}`); res.Code != http.StatusOK ||
+		service.actor != actor || service.goal != goal || service.version != 1 || service.last != "explain" ||
+		res.Header().Get("Cache-Control") != "no-store" || !strings.Contains(res.Body.String(), `"plan_version":1`) {
+		t.Fatal("explanation was routed incorrectly:", res.Code, service)
 	}
 	if res := send("PUT", "/steps/2/start", token, `{"plan_version":1}`); res.Code != http.StatusOK ||
 		service.step != 2 || service.version != 1 || service.last != "start" {

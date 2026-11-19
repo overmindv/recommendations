@@ -55,6 +55,10 @@ func (s *Service) Current(ctx context.Context, actor, goal string) (View, error)
 	return s.store.Current(ctx, actor, goal)
 }
 
+func (s *Service) Explain(ctx context.Context, actor, goal string, version int64) (Explanation, error) {
+	return s.store.Explain(ctx, actor, goal, version)
+}
+
 func (s *Service) CompleteActivity(ctx context.Context, actor, goal string, version int64, ordinal int) (View, error) {
 	return s.store.CompleteActivity(ctx, actor, goal, version, ordinal)
 }

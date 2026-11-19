@@ -27,6 +27,7 @@ func (a *studyAllocator) preserve(fresh StudyCalendar, weeks []LearningWeek) err
 				a.count == MaxLearningItems || a.used[studyResourceID{item.Kind, item.ID}] {
 				return ErrInvalidInput
 			}
+			item.Decision = nil
 			a.place(i, item)
 			a.resume = i
 			if !item.Superseded {

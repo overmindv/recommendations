@@ -61,6 +61,8 @@ type Draft struct {
 	EvidenceWatermark [32]byte
 	EvidencePolicy    mastery.Policy
 	ScopeTopics       []string
+	EvidenceTopics    []mastery.Topic
+	EvidenceCaptured  time.Time
 }
 
 type Assessment struct {

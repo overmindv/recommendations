@@ -185,7 +185,7 @@ func TestPostgresStudyPlanThroughOwners(t *testing.T) {
 	serviceToken := strings.Repeat("w", 32)
 	RegisterStudyPlans(router, serviceToken, service)
 	path := "/v1/learner/goals/" + goal + "/study-plan"
-	send := func(method, suffix, user, body, key string, want int) studyplans.View {
+	request := func(method, suffix, user, body, key string, want int) *httptest.ResponseRecorder {
 		t.Helper()
 		r := httptest.NewRequestWithContext(ctx, method, path+suffix, strings.NewReader(body))
 		r.Header.Set("Authorization", "Bearer "+serviceToken)
@@ -199,6 +199,11 @@ func TestPostgresStudyPlanThroughOwners(t *testing.T) {
 		if w.Code != want {
 			t.Fatal("unexpected study plan response:", w.Code, w.Body.String())
 		}
+		return w
+	}
+	send := func(method, suffix, user, body, key string, want int) studyplans.View {
+		t.Helper()
+		w := request(method, suffix, user, body, key, want)
 		var view studyplans.View
 		if want == http.StatusOK {
 			if err := json.NewDecoder(w.Body).Decode(&view); err != nil {
@@ -213,6 +218,15 @@ func TestPostgresStudyPlanThroughOwners(t *testing.T) {
 		t.Fatal("a foreign goal read the owner catalog")
 	}
 	plan := send("PUT", "", actor, initial, id(60), http.StatusOK)
+	request("GET", "/explanation?plan_version=1", peer, "", "", http.StatusNotFound)
+	explained := request("GET", "/explanation?plan_version=1", actor, "", "", http.StatusOK)
+	var explanation studyplans.Explanation
+	if explained.Header().Get("Cache-Control") != "no-store" ||
+		json.NewDecoder(explained.Body).Decode(&explanation) != nil || len(explanation.Steps) != 3 ||
+		explanation.Steps[0].Reasons[0].Code != "topic_gap" || explanation.Steps[0].Evidence.Ref == nil ||
+		explanation.Steps[0].Evidence.Ref.Watermark != plan.EvidenceWatermark {
+		t.Fatal("initial explanation did not include the saved evidence reference")
+	}
 	var items []studyplans.Item
 	for _, week := range plan.Weeks {
 		items = append(items, week.Items...)
@@ -263,6 +277,11 @@ func TestPostgresStudyPlanThroughOwners(t *testing.T) {
 		t.Fatal(err)
 	}
 	followup := send("PUT", "", actor, next, id(61), http.StatusOK)
+	request("GET", "/explanation?plan_version=1", actor, "", "", http.StatusConflict)
+	due := request("GET", "/explanation?plan_version=2", actor, "", "", http.StatusOK)
+	if !strings.Contains(due.Body.String(), `"code":"due_review"`) || strings.Contains(due.Body.String(), `"alternative"`) {
+		t.Fatal("the pinned check was not explained or an alternate check was exposed:", due.Body.String())
+	}
 	items = items[:0]
 	for _, week := range followup.Weeks {
 		items = append(items, week.Items...)
@@ -277,6 +296,10 @@ func TestPostgresStudyPlanThroughOwners(t *testing.T) {
 	}
 	const third = `{"goal_version":1,"availability_version":1,"plan_version":2}`
 	withdrawn := send("PUT", "", actor, third, id(62), http.StatusOK)
+	reasons := request("GET", "/explanation?plan_version=3", actor, "", "", http.StatusOK)
+	if !strings.Contains(reasons.Body.String(), `"code":"missing_resource"`) {
+		t.Fatal("withdrawn version did not report its limitation:", reasons.Body.String())
+	}
 	if withdrawn.Version != 3 || withdrawn.NextStep != nil || withdrawn.GoalDemonstrated || len(withdrawn.UnmetOutcomes) != 1 ||
 		withdrawn.UnmetOutcomes[0].Stage != planner.StudyCheck || withdrawn.UnmetOutcomes[0].Reason != "missing_resource" {
 		t.Fatal("withdrawn retention version was silently replaced:", withdrawn)

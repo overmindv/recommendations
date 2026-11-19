@@ -126,7 +126,7 @@ func saveRebuiltVersion(ctx context.Context, tx pgx.Tx, source Sources, view Vie
 		return err
 	}
 	version := view.Version + 1
-	if err := saveDraft(ctx, tx, view.GoalID, version, source, draft); err != nil {
+	if err := saveDraft(ctx, tx, view.GoalID, version, source, draft, newOrd); err != nil {
 		return err
 	}
 	if len(oldOrd) != 0 {
@@ -174,6 +174,12 @@ func carryProgress(ctx context.Context, tx pgx.Tx, view View, version int64, old
 		SELECT $1,$3,pairs.current,a.submission_id,a.event_id,a.correction_version,a.verdict,a.graded_at
 		FROM unnest($4::smallint[],$5::smallint[]) AS pairs(previous,current)
 		JOIN study_plan_assessments AS a ON a.goal_id=$1 AND a.plan_version=$2 AND a.ordinal=pairs.previous`,
+		view.GoalID, view.Version, version, oldOrd, newOrd)
+	batch.Queue(`
+		INSERT INTO study_plan_explanations (goal_id,plan_version,ordinal,details)
+		SELECT $1,$3,pairs.current,e.details
+		FROM unnest($4::smallint[],$5::smallint[]) AS pairs(previous,current)
+		JOIN study_plan_explanations AS e ON e.goal_id=$1 AND e.plan_version=$2 AND e.ordinal=pairs.previous`,
 		view.GoalID, view.Version, version, oldOrd, newOrd)
 	return tx.SendBatch(ctx, batch).Close()
 }

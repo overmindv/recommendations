@@ -39,9 +39,22 @@ type LearningRequest struct {
 
 type StudyItem struct {
 	ranking.Ranked
-	Stage         StudyStage `json:"stage"`
-	RequiresCheck []string   `json:"requires_checks,omitempty"`
-	Superseded    bool       `json:"superseded,omitempty"`
+	Stage         StudyStage     `json:"stage"`
+	RequiresCheck []string       `json:"requires_checks,omitempty"`
+	Superseded    bool           `json:"superseded,omitempty"`
+	Decision      *StudyDecision `json:"-"`
+}
+
+type StudyDecision struct {
+	ReviewDue    bool
+	RequiredBPS  int
+	Alternative  *StudyAlternative
+	alternatives []ranking.Ranked
+}
+
+type StudyAlternative struct {
+	ranking.ResourceKey
+	Minutes int `json:"estimated_minutes"`
 }
 
 type LearningContinuation struct {

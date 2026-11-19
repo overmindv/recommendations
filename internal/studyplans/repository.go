@@ -75,7 +75,7 @@ func (p *Postgres) Save(ctx context.Context, actor, goal string, input Generatio
 			return ErrConflict
 		}
 		version := input.PlanVersion + 1
-		if err := saveDraft(ctx, tx, goal, version, current, draft); err != nil {
+		if err := saveDraft(ctx, tx, goal, version, current, draft, nil); err != nil {
 			return err
 		}
 		digest := input.digest()

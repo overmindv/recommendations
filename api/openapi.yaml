@@ -271,6 +271,34 @@ paths:
           $ref: '#/components/responses/StudyPlan'
         default:
           $ref: '#/components/responses/Error'
+  /v1/learner/goals/{id}/study-plan/explanation:
+    parameters:
+      - $ref: '#/components/parameters/Actor'
+      - $ref: '#/components/parameters/StudyPlanGoal'
+      - name: plan_version
+        in: query
+        required: true
+        description: The version returned by the current study plan. A changed version returns VERSION_CONFLICT.
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 1024
+    get:
+      operationId: getStudyPlanExplanation
+      responses:
+        '200':
+          description: Reasons, evidence and limits of the saved version.
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudyPlanExplanation'
+        default:
+          $ref: '#/components/responses/Error'
   /v1/learner/goals/{id}/study-plan/steps/{ordinal}/start:
     parameters:
       - $ref: '#/components/parameters/Actor'
@@ -448,6 +476,110 @@ components:
               message:
                 type: string
   schemas:
+    StudyPlanExplanation:
+      type: object
+      required: [plan_version, stale, steps, limits]
+      properties:
+        plan_version:
+          type: integer
+          format: int64
+          minimum: 1
+        stale:
+          type: boolean
+        steps:
+          type: array
+          maxItems: 128
+          items:
+            $ref: '#/components/schemas/StudyStepExplanation'
+        limits:
+          type: array
+          maxItems: 64
+          items:
+            type: object
+            required: [topic_id, code, message]
+            properties:
+              topic_id:
+                type: string
+                format: uuid
+              stage:
+                enum: [theory, practice, independent_check]
+              code:
+                enum: [prerequisite, time_budget, missing_resource, plan_limit]
+              message:
+                type: string
+    StudyStepExplanation:
+      type: object
+      required: [ordinal, reasons, evidence]
+      properties:
+        ordinal:
+          type: integer
+          minimum: 1
+          maximum: 128
+        reasons:
+          type: array
+          maxItems: 4
+          items:
+            type: object
+            required: [code, message]
+            properties:
+              code:
+                enum: [topic_gap, prerequisite, time_fit, due_review, insufficient_evidence, learning_sequence]
+              topic_id:
+                type: string
+                format: uuid
+              minutes:
+                type: integer
+                minimum: 1
+              message:
+                type: string
+        evidence:
+          type: object
+          required: [topic_id, sample_count, uncertainty]
+          properties:
+            topic_id:
+              type: string
+              format: uuid
+            score_bps:
+              type: integer
+              minimum: 0
+              maximum: 10000
+            sample_count:
+              type: integer
+              minimum: 0
+              maximum: 512
+            last_evidence_at:
+              type: string
+              format: date-time
+            uncertainty:
+              enum: [not_recorded, no_evidence, limited_sample, bounded_history, sufficient_for_policy]
+            ref:
+              type: object
+              required: [watermark, policy_revision, captured_at]
+              properties:
+                watermark:
+                  type: string
+                  pattern: '^[a-f0-9]{64}$'
+                policy_revision:
+                  type: string
+                captured_at:
+                  type: string
+                  format: date-time
+        alternative:
+          description: A catalog candidate for the next unstarted theory or practice step; not a replacement command.
+          type: object
+          required: [kind, resource_id, revision_id, estimated_minutes]
+          properties:
+            kind:
+              enum: [theory, practice]
+            resource_id:
+              type: string
+              format: uuid
+            revision_id:
+              type: string
+              format: uuid
+            estimated_minutes:
+              type: integer
+              minimum: 1
     StudyPlan:
       type: object
       required:
