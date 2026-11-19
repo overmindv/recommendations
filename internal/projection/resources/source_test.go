@@ -38,6 +38,9 @@ func TestTaskSourceReadsPinnedSnapshotAndAvailability(t *testing.T) {
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"watermark": 7, "through": 7, "more": false, "changes": []taskEnvelope{event}})
 		case "/v1/internal/resources/availability":
+			if r.Header.Get("X-User-ID") != "" {
+				t.Error("general availability received a learner ID")
+			}
 			input, _ := io.ReadAll(r.Body)
 			if r.Method != http.MethodPost || !strings.Contains(string(input), revisionID) {
 				t.Error("resource check did not use the exact revision")
@@ -66,6 +69,56 @@ func TestTaskSourceReadsPinnedSnapshotAndAvailability(t *testing.T) {
 	available, err := client.Available(t.Context(), []VersionKey{key, other})
 	if err != nil || !available[key] || available[other] {
 		t.Fatal(available, err)
+	}
+}
+
+func TestTaskSourceChecksDiagnosticHistoryForExactVersions(t *testing.T) {
+	key := VersionKey{resourceID, revisionID}
+	other := VersionKey{topicID, revisionID}
+	token := strings.Repeat("a", 32)
+	for _, tc := range []struct {
+		name string
+		code int
+		keys []taskVersionKey
+	}{
+		{"eligible subset", http.StatusOK, []taskVersionKey{{ID: key.ID, VersionID: key.RevisionID}}},
+		{"unknown revision", http.StatusOK, []taskVersionKey{{ID: key.ID, VersionID: sourceEventID}}},
+		{"owner unavailable", http.StatusServiceUnavailable, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost || r.URL.Path != "/v1/internal/resources/diagnostic-eligibility" ||
+					r.Header.Get("Authorization") != "Bearer "+token || r.Header.Get("X-User-ID") != sourceEventID {
+					t.Error("incorrect diagnostic owner request")
+				}
+				var got taskAvailability
+				decoder := json.NewDecoder(r.Body)
+				decoder.DisallowUnknownFields()
+				if err := decoder.Decode(&got); err != nil || len(got.Resources) != 2 ||
+					got.Resources[0] != (taskVersionKey{ID: key.ID, VersionID: key.RevisionID}) ||
+					got.Resources[1] != (taskVersionKey{ID: other.ID, VersionID: other.RevisionID}) {
+					t.Error("incorrect diagnostic versions:", got, err)
+				}
+				w.WriteHeader(tc.code)
+				_ = json.NewEncoder(w).Encode(taskAvailability{Resources: tc.keys})
+			}))
+			defer server.Close()
+			client, err := NewTaskClient(server.URL, token)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := client.DiagnosticEligible(t.Context(), "", []VersionKey{key}); err == nil {
+				t.Fatal("unchecked learner accepted")
+			}
+			got, err := client.DiagnosticEligible(t.Context(), sourceEventID, []VersionKey{key, other})
+			if tc.name == "eligible subset" {
+				if err != nil || !got[key] || got[other] {
+					t.Fatal("incorrect eligible subset:", got, err)
+				}
+			} else if err == nil || got != nil {
+				t.Fatal("unchecked task marked eligible:", got, err)
+			}
+		})
 	}
 }
 
