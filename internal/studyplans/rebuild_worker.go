@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log/slog"
 	"time"
+
+	"github.com/overmindv/recommendations/internal/observability"
 )
 
 const (
@@ -30,10 +32,16 @@ type RebuildWorker struct {
 	store   rebuildStore
 	planner RebuildPlanner
 	log     *slog.Logger
+	metrics *observability.Study
 }
 
 func NewRebuildWorker(store *Postgres, planner RebuildPlanner, log *slog.Logger) *RebuildWorker {
 	return &RebuildWorker{store: store, planner: planner, log: log}
+}
+
+func (w RebuildWorker) WithMetrics(metrics *observability.Study) *RebuildWorker {
+	w.metrics = metrics
+	return &w
 }
 
 func (w *RebuildWorker) Run(ctx context.Context) error {
@@ -87,7 +95,12 @@ func (w *RebuildWorker) step(ctx context.Context) (bool, error) {
 	return true, errors.Join(err, release)
 }
 
-func (w *RebuildWorker) rebuild(ctx context.Context, job RebuildJob) error {
+func (w *RebuildWorker) rebuild(ctx context.Context, job RebuildJob) (err error) {
+	result := observability.Saved
+	if w.metrics != nil {
+		started := time.Now()
+		defer func() { w.metrics.Plan(ctx, observability.Rebuild, planResult(result, err), time.Since(started)) }()
+	}
 	base, err := w.store.LoadRebuild(ctx, job)
 	if err != nil {
 		return err
@@ -95,6 +108,9 @@ func (w *RebuildWorker) rebuild(ctx context.Context, job RebuildJob) error {
 	draft, err := w.planner.Rebuild(ctx, base)
 	if err != nil {
 		return err
+	}
+	if draft == nil {
+		result = observability.Unchanged
 	}
 	return w.store.CommitRebuild(ctx, job, base, draft)
 }

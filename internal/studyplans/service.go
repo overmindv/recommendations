@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/overmindv/recommendations/internal/observability"
 	"github.com/overmindv/recommendations/internal/planner"
 	"github.com/overmindv/recommendations/internal/ranking"
 )
@@ -25,6 +26,7 @@ type Service struct {
 	slots            chan struct{}
 	access           StepAvailability
 	maxProjectionAge time.Duration
+	metrics          *observability.Study
 }
 
 func NewService(store *Postgres, builder DraftBuilder) *Service {
@@ -36,12 +38,23 @@ func (s Service) WithLiveCatalog(access StepAvailability, maxAge time.Duration) 
 	return &s
 }
 
-func (s *Service) Generate(ctx context.Context, actor, goal string, input Generation) (View, error) {
+func (s Service) WithMetrics(metrics *observability.Study) *Service {
+	s.metrics = metrics
+	return &s
+}
+
+func (s *Service) Generate(ctx context.Context, actor, goal string, input Generation) (view View, err error) {
+	result := observability.Saved
+	if s.metrics != nil {
+		started := time.Now()
+		defer func() { s.metrics.Plan(ctx, observability.Generate, planResult(result, err), time.Since(started)) }()
+	}
 	source, replay, err := s.store.Prepare(ctx, actor, goal, input)
 	if err != nil {
 		return View{}, err
 	}
 	if replay != nil {
+		result = observability.Replayed
 		return s.catalogView(ctx, *replay, nil)
 	}
 	select {
@@ -50,6 +63,7 @@ func (s *Service) Generate(ctx context.Context, actor, goal string, input Genera
 	case s.slots <- struct{}{}:
 		defer func() { <-s.slots }()
 	default:
+		result = observability.FallbackBusy
 		return s.savedPlanFallback(ctx, actor, goal, source.PlanVersion, ErrUnavailable)
 	}
 	draft, err := s.builder.Build(ctx, actor, goal, source)
@@ -59,11 +73,19 @@ func (s *Service) Generate(ctx context.Context, actor, goal string, input Genera
 			return View{}, retryErr
 		}
 		if replay != nil {
+			result = observability.Replayed
 			return s.catalogView(ctx, *replay, nil)
+		}
+		result = observability.FallbackUnavailable
+		if errors.Is(err, ErrProjectionStale) {
+			result = observability.FallbackStale
 		}
 		return s.savedPlanFallback(ctx, actor, goal, source.PlanVersion, err)
 	}
-	view, err := s.store.Save(ctx, actor, goal, input, source, draft)
+	view, replayed, err := s.store.save(ctx, actor, goal, input, source, draft)
+	if replayed {
+		result = observability.Replayed
+	}
 	return s.catalogView(ctx, view, err)
 }
 

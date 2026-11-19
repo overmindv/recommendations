@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/overmindv/recommendations/internal/mastery"
+	"github.com/overmindv/recommendations/internal/observability"
 	"github.com/overmindv/recommendations/internal/planner"
 	"github.com/overmindv/recommendations/internal/projection/catalog"
 	"github.com/overmindv/recommendations/internal/ranking"
@@ -24,6 +25,7 @@ type ProjectedBuilder struct {
 	ranking          ranking.Policy
 	evidence         mastery.Policy
 	maxProjectionAge time.Duration
+	metrics          *observability.Study
 }
 
 func NewProjectedBuilder(pool *pgxpool.Pool, resources ResourceSource, rankingPolicy ranking.Policy, evidencePolicy mastery.Policy) *ProjectedBuilder {
@@ -35,10 +37,18 @@ func (b ProjectedBuilder) WithProjectionFreshness(maxAge time.Duration) *Project
 	return &b
 }
 
+func (b ProjectedBuilder) WithMetrics(metrics *observability.Study) *ProjectedBuilder {
+	b.metrics = metrics
+	return &b
+}
+
 func (b *ProjectedBuilder) Build(ctx context.Context, actor, goal string, source Sources) (Draft, error) {
 	input, now, evidence, err := b.inputs(ctx, actor, goal, source, b.ranking, b.evidence)
 	if err != nil {
 		return Draft{}, err
+	}
+	if b.metrics != nil {
+		b.metrics.Candidates(observability.Generate, len(input.Resources) > 0)
 	}
 	plan, err := planner.BuildLearningPlan(ctx, now, input)
 	if err != nil {

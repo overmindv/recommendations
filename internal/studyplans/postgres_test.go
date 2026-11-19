@@ -6,6 +6,8 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"reflect"
 	"strings"
@@ -16,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/overmindv/recommendations/internal/mastery"
+	"github.com/overmindv/recommendations/internal/observability"
 	"github.com/overmindv/recommendations/internal/planner"
 	"github.com/overmindv/recommendations/internal/projection/catalog"
 	"github.com/overmindv/recommendations/internal/ranking"
@@ -159,12 +162,16 @@ func TestPostgresPlanCASAndReplay(t *testing.T) {
 		t.Fatal("could not prepare with changed allocation:", replay, err)
 	}
 	draft = testDraft(t, source, id)
+	var duplicates [2]bool
 	for i := range results {
-		group.Go(func() { results[i], failures[i] = store.Save(ctx, actor, goal, next, source, draft) })
+		group.Go(func() { results[i], duplicates[i], failures[i] = store.save(ctx, actor, goal, next, source, draft) })
 	}
 	group.Wait()
 	if failures[0] != nil || failures[1] != nil || results[0].Version != 2 || !reflect.DeepEqual(results[0], results[1]) {
 		t.Fatal("parallel request replay created different versions:", failures, results[0].Version, results[1].Version)
+	}
+	if duplicates[0] == duplicates[1] {
+		t.Fatal("parallel request replay did not distinguish the single write")
 	}
 	_, historical, err := store.Prepare(ctx, actor, goal, winner)
 	if err != nil || historical == nil || historical.Version != 1 || historical.Current || historical.CreatedAt != got.CreatedAt {
@@ -352,6 +359,22 @@ func TestPostgresGenerationUsesProjectedEvidence(t *testing.T) {
 		refreshed.Guidance == nil || refreshed.Guidance.Basis != "evidence" || refreshed.Guidance.RecommendDiagnostic {
 		t.Fatal("new generation did not use the updated evidence:", refreshed, err)
 	}
+	previous := fixture.Plan.RankingPolicy
+	previous.Version = "previous-ranking"
+	rolledBack := NewService(store, NewProjectedBuilder(pool, owner, previous, fixture.EvidencePolicy))
+	saved, err := rolledBack.Current(ctx, actor, goal)
+	if err != nil || saved.RankingPolicy != refreshed.RankingPolicy {
+		t.Fatal("startup policy changed the saved plan:", err)
+	}
+	retried, err := rolledBack.Generate(ctx, actor, goal, input)
+	if err != nil || retried.RankingPolicy != refreshed.RankingPolicy || calls != 2 {
+		t.Fatal("rollback changed a previously accepted operation:", err)
+	}
+	input.RequestID, input.PlanVersion = id(18), 2
+	generated, err := rolledBack.Generate(ctx, actor, goal, input)
+	if err != nil || generated.Version != 3 || generated.RankingPolicy != previous || calls != 3 {
+		t.Fatal("explicit generation ignored the selected rollback policy:", err)
+	}
 }
 
 func TestPostgresEmptyStudyPoolShowsCoverageGap(t *testing.T) {
@@ -382,8 +405,10 @@ func TestPostgresEmptyStudyPoolShowsCoverageGap(t *testing.T) {
 	empty := studySourceFunc(func(context.Context, string, string, []string) ([]planner.StudyResource, error) {
 		return nil, nil
 	})
-	builder := NewProjectedBuilder(pool, empty, fixture.Plan.RankingPolicy, fixture.EvidencePolicy).WithProjectionFreshness(time.Minute)
-	service := NewService(store, builder).WithLiveCatalog(nil, time.Minute)
+	metrics := observability.NewStudy(nil, fixture.Plan.RankingPolicy.Version, "current", false)
+	builder := NewProjectedBuilder(pool, empty, fixture.Plan.RankingPolicy, fixture.EvidencePolicy).
+		WithProjectionFreshness(time.Minute).WithMetrics(metrics)
+	service := NewService(store, builder).WithLiveCatalog(nil, time.Minute).WithMetrics(metrics)
 	view, err := service.Generate(ctx, actor, goal, input)
 	if err != nil || view.Version != 1 || view.NextStep != nil || view.GoalDemonstrated ||
 		view.Freshness == nil || view.Freshness.Status != "fresh" || view.Guidance == nil ||
@@ -396,12 +421,31 @@ func TestPostgresEmptyStudyPoolShowsCoverageGap(t *testing.T) {
 			t.Fatal("empty resource pool returned a scheduled item")
 		}
 	}
+	token := strings.Repeat("m", 32)
+	scrape := func() string {
+		service.sampleCatalog(ctx)
+		r := httptest.NewRequest(http.MethodGet, observability.StudyMetricsPath, nil)
+		r.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		metrics.Handler(token).ServeHTTP(w, r)
+		return w.Body.String()
+	}
+	if body := scrape(); !strings.Contains(body, "recommendations_study_catalog_state 2\n") ||
+		!strings.Contains(body, `recommendations_study_candidate_checks_total{operation="generate",pool="empty"} 1`) {
+		t.Fatal("scrape missed a fresh catalog or an empty pool")
+	}
+	if _, err := pool.Exec(ctx, "UPDATE catalog_projection_state SET last_synced_at=now()-interval '3 minutes' WHERE singleton"); err != nil {
+		t.Fatal(err)
+	}
+	if body := scrape(); !strings.Contains(body, "recommendations_study_catalog_state 1\n") {
+		t.Fatal("scrape reported fresh data without new requests or synchronization")
+	}
 }
 
 var errSyntheticRollback = errors.New("discard test graph")
 
 func BenchmarkCurrentStudyPlan(b *testing.B) {
-	store, actor, goal := maxStudyPlanFixture(b)
+	store, actor, goal, _ := maxStudyPlanFixture(b)
 	b.ReportAllocs()
 	for b.Loop() {
 		view, err := store.Current(b.Context(), actor, goal)
@@ -412,7 +456,7 @@ func BenchmarkCurrentStudyPlan(b *testing.B) {
 }
 
 func BenchmarkCurrentStudyPlanWithFreshness(b *testing.B) {
-	store, actor, goal := maxStudyPlanFixture(b)
+	store, actor, goal, _ := maxStudyPlanFixture(b)
 	service := NewService(store, nil).WithLiveCatalog(nil, 90*time.Second)
 	b.ReportAllocs()
 	for b.Loop() {
@@ -423,7 +467,7 @@ func BenchmarkCurrentStudyPlanWithFreshness(b *testing.B) {
 	}
 }
 func BenchmarkExplainStudyPlan(b *testing.B) {
-	store, actor, goal := maxStudyPlanFixture(b)
+	store, actor, goal, _ := maxStudyPlanFixture(b)
 	b.ReportAllocs()
 	for b.Loop() {
 		view, err := store.Explain(b.Context(), actor, goal, 1)
@@ -433,7 +477,26 @@ func BenchmarkExplainStudyPlan(b *testing.B) {
 	}
 }
 
-func maxStudyPlanFixture(b *testing.B) (*Postgres, string, string) {
+func BenchmarkStudyGenerationReplayMetrics(b *testing.B) {
+	for _, mode := range []string{"off", "on"} {
+		b.Run(mode, func(b *testing.B) {
+			store, actor, goal, input := maxStudyPlanFixture(b)
+			service := NewService(store, nil).WithLiveCatalog(nil, 90*time.Second)
+			if mode == "on" {
+				service = service.WithMetrics(observability.NewStudy(nil, "benchmark", "current", false))
+			}
+			b.ReportAllocs()
+			for b.Loop() {
+				view, err := service.Generate(b.Context(), actor, goal, input)
+				if err != nil || view.Version != 1 || findItem(view, planner.MaxLearningItems) == nil {
+					b.Fatal("saved generation was not replayed:", err)
+				}
+			}
+		})
+	}
+}
+
+func maxStudyPlanFixture(b *testing.B) (*Postgres, string, string, Generation) {
 	b.Helper()
 	ctx, pool := b.Context(), studyTestPool(b)
 	id := studySeed(b, pool)
@@ -473,5 +536,5 @@ func maxStudyPlanFixture(b *testing.B) (*Postgres, string, string) {
 	if _, err := store.Save(ctx, actor, goal, input, source, draft); err != nil {
 		b.Fatal(err)
 	}
-	return store, actor, goal
+	return store, actor, goal, input
 }

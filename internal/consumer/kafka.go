@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/overmindv/recommendations/internal/observability"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -32,6 +33,7 @@ type Worker struct {
 	contentTopic string
 	opts         []kgo.Opt
 	log          *slog.Logger
+	metrics      *observability.Study
 }
 
 func NewWorker(store *Postgres, contentTopic string, log *slog.Logger, options ...kgo.Opt) *Worker {
@@ -42,6 +44,11 @@ func NewWorker(store *Postgres, contentTopic string, log *slog.Logger, options .
 		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
 		kgo.FetchMaxBytes(1<<20), kgo.FetchMaxPartitionBytes(64<<10), kgo.MaxConcurrentFetches(2))
 	return &Worker{store: store, contentTopic: contentTopic, opts: opts, log: log}
+}
+
+func (w *Worker) WithMetrics(metrics *observability.Study) *Worker {
+	w.metrics = metrics
+	return w
 }
 
 func (w *Worker) Run(ctx context.Context) error {
@@ -74,12 +81,15 @@ func (w *Worker) consume(ctx context.Context, client groupClient, budget time.Du
 		for _, problem := range problems {
 			var loss *kgo.ErrDataLoss
 			if errors.Is(problem.Err, kerr.OffsetOutOfRange) || errors.As(problem.Err, &loss) {
+				w.observeFailure(observability.EvidenceOffsetLost)
 				return errOffsetLost
 			}
 			if errors.Is(problem.Err, kerr.TopicAuthorizationFailed) || errors.Is(problem.Err, kerr.GroupAuthorizationFailed) ||
 				errors.Is(problem.Err, kerr.SaslAuthenticationFailed) {
+				w.observeFailure(observability.EvidenceAccessDenied)
 				return errKafkaAccess
 			}
+			w.observeFailure(observability.EvidencePollFailure)
 		}
 		records := fetches.Records()
 		if len(records) == 0 {
@@ -128,8 +138,16 @@ func (w *Worker) processBatch(ctx context.Context, client groupClient, records [
 		}
 		cancel()
 		if err == nil {
+			if w.metrics != nil {
+				w.observeCommitted(records, time.Now())
+			}
 			return nil
 		}
+		failure := observability.EvidenceStoreFailure
+		if saved {
+			failure = observability.EvidenceCommitFailure
+		}
+		w.observeFailure(failure)
 		w.log.WarnContext(ctx, "learning evidence batch retry", "stage", stage, "size", len(records), "delay", delay)
 		if !wait(ctx, delay) {
 			break
@@ -137,6 +155,23 @@ func (w *Worker) processBatch(ctx context.Context, client groupClient, records [
 		delay = min(2*delay, 3*time.Second)
 	}
 	return ctx.Err()
+}
+
+func (w *Worker) observeCommitted(records []*kgo.Record, committedAt time.Time) {
+	for _, record := range records {
+		switch record.Topic {
+		case TasksTopic:
+			w.metrics.EvidenceCommitted(observability.EvidenceTasks, record.Timestamp, committedAt)
+		case w.contentTopic:
+			w.metrics.EvidenceCommitted(observability.EvidenceContent, record.Timestamp, committedAt)
+		}
+	}
+}
+
+func (w *Worker) observeFailure(failure observability.EvidenceFailure) {
+	if w.metrics != nil {
+		w.metrics.EvidenceFailure(failure)
+	}
 }
 
 func wait(ctx context.Context, duration time.Duration) bool {

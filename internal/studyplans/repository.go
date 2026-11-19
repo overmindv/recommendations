@@ -16,8 +16,9 @@ import (
 )
 
 type Postgres struct {
-	pool             *pgxpool.Pool
-	completionChecks bool
+	pool               *pgxpool.Pool
+	completionChecks   bool
+	manualRebuildsOnly bool
 }
 
 func NewPostgres(pool *pgxpool.Pool) *Postgres {
@@ -56,10 +57,16 @@ func (p *Postgres) Prepare(ctx context.Context, actor, goal string, input Genera
 }
 
 func (p *Postgres) Save(ctx context.Context, actor, goal string, input Generation, source Sources, draft Draft) (View, error) {
+	view, _, err := p.save(ctx, actor, goal, input, source, draft)
+	return view, err
+}
+
+func (p *Postgres) save(ctx context.Context, actor, goal string, input Generation, source Sources, draft Draft) (View, bool, error) {
 	if !input.valid(actor, goal) {
-		return View{}, ErrInvalid
+		return View{}, false, ErrInvalid
 	}
 	var saved View
+	var replayed bool
 	err := pgx.BeginFunc(ctx, p.pool, func(tx pgx.Tx) error {
 		if err := learnergoals.LockBudget(ctx, tx, actor); err != nil {
 			return err
@@ -73,7 +80,7 @@ func (p *Postgres) Save(ctx context.Context, actor, goal string, input Generatio
 			return err
 		}
 		if replay != nil {
-			saved = *replay
+			saved, replayed = *replay, true
 			return nil
 		}
 		if err := checkExpected(current, input); err != nil {
@@ -108,9 +115,9 @@ func (p *Postgres) Save(ctx context.Context, actor, goal string, input Generatio
 		return err
 	})
 	if err != nil {
-		return View{}, fmt.Errorf("save study plan: %w", err)
+		return View{}, false, fmt.Errorf("save study plan: %w", err)
 	}
-	return saved, nil
+	return saved, replayed, nil
 }
 
 func (p *Postgres) Current(ctx context.Context, actor, goal string) (View, error) {

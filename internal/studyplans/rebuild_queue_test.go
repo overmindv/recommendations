@@ -55,6 +55,33 @@ func takeFixtureRebuild(t *testing.T, store *Postgres) (RebuildJob, RebuildBase)
 	return job, base
 }
 
+func TestPostgresManualQueueLeavesAutomaticWorkPending(t *testing.T) {
+	ctx, pool := t.Context(), studyTestPool(t)
+	auto := NewPostgres(pool)
+	manual := auto.WithManualRebuildsOnly()
+	a, _ := readyFixturePlan(t, pool, auto)
+	b, _ := readyFixturePlan(t, pool, auto)
+	enqueueFixture(t, pool, a(3))
+	if _, found, err := manual.ClaimRebuild(ctx, 30*time.Second); err != nil || found {
+		t.Fatal("disabled adaptation claimed an automatic job:", found, err)
+	}
+	if _, err := manual.SubmitFeedback(ctx, b(1), b(3),
+		Feedback{RequestID: b(92), PlanVersion: 1, Action: FeedbackSkip, Ordinal: new(1)}); err != nil {
+		t.Fatal(err)
+	}
+	job, base := takeFixtureRebuild(t, manual)
+	if job.GoalID != b(3) {
+		t.Fatal("manual queue did not select the learner request")
+	}
+	if err := manual.CommitRebuild(ctx, job, base, nil); err != nil {
+		t.Fatal(err)
+	}
+	job, _ = takeFixtureRebuild(t, auto)
+	if job.GoalID != a(3) {
+		t.Fatal("re-enabled adaptation lost pending evidence")
+	}
+}
+
 func TestPostgresRebuildLeaseDoesNotLoseNewEvidence(t *testing.T) {
 	ctx, pool := t.Context(), studyTestPool(t)
 	store := NewPostgres(pool)

@@ -36,15 +36,24 @@ type RebuildBase struct {
 
 const readyRebuildAt = "GREATEST(available_at, COALESCE(retry_at, '-infinity'::timestamptz), COALESCE(leased_until, '-infinity'::timestamptz))"
 
+func (p Postgres) WithManualRebuildsOnly() *Postgres {
+	p.manualRebuildsOnly = true
+	return &p
+}
+
 func (p *Postgres) ClaimRebuild(ctx context.Context, lifetime time.Duration) (RebuildJob, bool, error) {
 	if lifetime < time.Second || lifetime > 5*time.Minute {
 		return RebuildJob{}, false, ErrInvalid
+	}
+	scope := ""
+	if p.manualRebuildsOnly {
+		scope = "priority AND "
 	}
 	var job RebuildJob
 	err := p.pool.QueryRow(ctx, `
 		WITH ready AS (
 		    SELECT goal_id FROM study_plan_rebuilds
-		    WHERE `+readyRebuildAt+` <= statement_timestamp()
+		    WHERE `+scope+readyRebuildAt+` <= statement_timestamp()
 		    ORDER BY `+readyRebuildAt+`, goal_id LIMIT 1 FOR UPDATE SKIP LOCKED
 		), claimed AS (
 		    UPDATE study_plan_rebuilds AS q SET lease_token=gen_random_uuid(),
