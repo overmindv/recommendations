@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	completionqueue "github.com/overmindv/recommendations/internal/completion/queue"
 	"github.com/overmindv/recommendations/internal/planner"
 )
 
@@ -23,6 +24,12 @@ type command struct {
 func LockBudget(ctx context.Context, tx pgx.Tx, actor string) error {
 	_, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 198))", actor)
 	return err
+}
+
+func TryLockBudget(ctx context.Context, tx pgx.Tx, actor string) (bool, error) {
+	var locked bool
+	err := tx.QueryRow(ctx, "SELECT pg_try_advisory_xact_lock(hashtextextended($1, 198))", actor).Scan(&locked)
+	return locked, err
 }
 
 func executeWrite[T any](ctx context.Context, store *Postgres, actor, requestID string, cmd command,
@@ -71,6 +78,11 @@ func executeWrite[T any](ctx context.Context, store *Postgres, actor, requestID 
 		value, err := write(tx, now)
 		if err != nil {
 			return err
+		}
+		if store.completionChecks && (cmd.Operation == "update" || cmd.Operation == "delete") {
+			if err := completionqueue.Request(ctx, tx, []string{actor}); err != nil {
+				return err
+			}
 		}
 		result = value
 		response, err := json.Marshal(result)

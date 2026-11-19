@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	completionqueue "github.com/overmindv/recommendations/internal/completion/queue"
 	"github.com/overmindv/recommendations/internal/learnergoals"
 	"github.com/overmindv/recommendations/internal/planner"
 )
@@ -158,6 +159,11 @@ func (p *Postgres) CommitRebuild(ctx context.Context, job RebuildJob, base Rebui
 		if draft != nil {
 			if err := saveRebuiltVersion(ctx, tx, current, view, *draft); err != nil {
 				return err
+			}
+			if p.completionChecks {
+				if err := completionqueue.Request(ctx, tx, []string{job.Actor}); err != nil {
+					return err
+				}
 			}
 		}
 		return acknowledgeRebuild(ctx, tx, job)

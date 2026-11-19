@@ -5,9 +5,11 @@ import (
 	"time"
 
 	"github.com/overmindv/recommendations/internal/mastery"
+	"github.com/overmindv/recommendations/pkg/api/goalcompletion"
 )
 
 func TestStudyPlansRequireExplicitPolicy(t *testing.T) {
+	t.Setenv("RECOMMENDATIONS_GOAL_COMPLETION_ENABLED", "")
 	t.Setenv("RECOMMENDATIONS_STUDY_ADAPTATION_ENABLED", "")
 	t.Setenv("RECOMMENDATIONS_STUDY_PLANS_ENABLED", "")
 	if cfg, err := loadStudyPlans(Config{}); err != nil || cfg != nil {
@@ -25,6 +27,21 @@ func TestStudyPlansRequireExplicitPolicy(t *testing.T) {
 		cfg.Ranking.Version != "test" || cfg.AdaptationWindow != 0 {
 		t.Fatal("valid explicit policy rejected:", cfg, err)
 	}
+	t.Setenv("RECOMMENDATIONS_GOAL_COMPLETION_ENABLED", "true")
+	if cfg, err := loadStudyPlans(prerequisites); err != nil || !cfg.CompletionEvents || cfg.AdaptationWindow != 0 {
+		t.Fatal("goal completion should not depend on automatic replanning:", cfg, err)
+	}
+	collision := prerequisites
+	collision.Evidence.ContentTopic = goalcompletion.Topic
+	if _, err := loadStudyPlans(collision); err == nil {
+		t.Fatal("goal completion accepted an input topic collision")
+	}
+	t.Setenv("RECOMMENDATIONS_STUDY_PLANS_ENABLED", "")
+	if _, err := loadStudyPlans(prerequisites); err == nil {
+		t.Fatal("goal completion allowed without study plans")
+	}
+	t.Setenv("RECOMMENDATIONS_GOAL_COMPLETION_ENABLED", "")
+	t.Setenv("RECOMMENDATIONS_STUDY_PLANS_ENABLED", "true")
 	for _, bad := range []string{"", "5m", "1h5ms", "721h"} {
 		t.Setenv("RECOMMENDATIONS_STUDY_RECENT_WINDOW", bad)
 		if _, err := loadStudyPlans(prerequisites); err == nil {
