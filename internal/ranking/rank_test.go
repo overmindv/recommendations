@@ -39,7 +39,7 @@ func TestRankRecordsPolicyAndPoints(t *testing.T) {
 		},
 	}
 	got, err := Rank(request, policy)
-	if err != nil || got.Policy != policy || got.Algorithm != algorithmVersion || len(got.Items) != 2 {
+	if err != nil || got.Policy != policy || got.Algorithm != AlgorithmVersion || len(got.Items) != 2 {
 		t.Fatal("expected versioned ranking:", got, err)
 	}
 	want := Factors{Gap: 4000, Difficulty: 30000, Duration: 30000, Variety: 50000, DueReview: 60000}

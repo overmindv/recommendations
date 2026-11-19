@@ -37,7 +37,7 @@ type scored struct {
 }
 
 func Rank(request Request, policy Policy) (Result, error) {
-	if !policy.valid() || request.Limit < 1 || request.Limit > MaxResult ||
+	if !policy.Valid() || request.Limit < 1 || request.Limit > MaxResult ||
 		(request.PreviousKind != "" && request.PreviousKind != Theory && request.PreviousKind != Practice) {
 		return Result{}, ErrInvalid
 	}
@@ -87,7 +87,7 @@ func Rank(request Request, policy Policy) (Result, error) {
 
 	count := min(len(ranked), request.Limit)
 	result := Result{
-		Algorithm: algorithmVersion, Policy: policy, Filters: filters,
+		Algorithm: AlgorithmVersion, Policy: policy, Filters: filters,
 		Items: make([]Ranked, count),
 	}
 	for i, item := range ranked[:count] {
