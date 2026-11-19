@@ -4,8 +4,12 @@ go 1.26.11
 
 require (
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/overmindv/content v0.0.0-20261119081906-773e55a3cb7b
 	github.com/overmindv/parker v0.1.0
-	golang.org/x/sync v0.22.0
+	github.com/twmb/franz-go v1.21.6
+	github.com/twmb/franz-go/pkg/kmsg v1.13.1
+	golang.org/x/sync v0.23.0
+	google.golang.org/grpc v1.83.2
 )
 
 require (
@@ -24,10 +28,10 @@ require (
 	github.com/prometheus/common v0.70.1 // indirect
 	github.com/prometheus/procfs v0.21.1 // indirect
 	github.com/sethvargo/go-retry v0.4.0 // indirect
-	github.com/twmb/franz-go v1.21.6 // indirect
-	github.com/twmb/franz-go/pkg/kmsg v1.13.1 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/text v0.41.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260720211330-0afa2a65878a // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
