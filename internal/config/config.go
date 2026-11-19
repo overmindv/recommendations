@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/overmindv/recommendations/internal/mastery"
 )
@@ -18,6 +19,7 @@ type Config struct {
 	Resources            Resources
 	Evidence             Evidence
 	Mastery              *mastery.Policy
+	RetentionInterval    time.Duration
 }
 
 func Load() (Config, error) {
@@ -57,6 +59,10 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	c.Mastery, err = loadMastery()
+	if err != nil {
+		return Config{}, err
+	}
+	c.RetentionInterval, err = loadRetention(c)
 	if err != nil {
 		return Config{}, err
 	}
