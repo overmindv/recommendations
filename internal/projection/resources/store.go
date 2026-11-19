@@ -151,16 +151,18 @@ const writeResourceSQL = `
 		ON CONFLICT (origin, generation, resource_id) DO UPDATE SET
 		    version = EXCLUDED.version, revision_id = EXCLUDED.revision_id, metadata = EXCLUDED.metadata
 		WHERE resource_projection_items.version < EXCLUDED.version
-		RETURNING resource_id
+		RETURNING resource_id, (metadata->>'EstimatedMinutes')::integer AS minutes
 	), removed AS (
 		DELETE FROM resource_projection_topics AS t USING updated AS u
 		WHERE t.origin = $1 AND t.generation = $2 AND t.resource_id = u.resource_id
 		    AND NOT (t.topic_id = ANY($7::uuid[]))
 	)
-	INSERT INTO resource_projection_topics (origin, generation, resource_id, topic_id, weight)
-	SELECT $1, $2, u.resource_id, t.id, t.weight
+	INSERT INTO resource_projection_topics (origin, generation, resource_id, topic_id, weight, diagnostic_minutes)
+	SELECT $1, $2, u.resource_id, t.id, t.weight,
+	       CASE WHEN $1 = 'tasks' AND u.minutes BETWEEN 1 AND 20 THEN u.minutes END
 	FROM updated AS u CROSS JOIN unnest($7::uuid[], $8::integer[]) AS t(id, weight)
-	ON CONFLICT (origin, generation, resource_id, topic_id) DO UPDATE SET weight = EXCLUDED.weight`
+	ON CONFLICT (origin, generation, resource_id, topic_id) DO UPDATE
+	SET weight = EXCLUDED.weight, diagnostic_minutes = EXCLUDED.diagnostic_minutes`
 
 func queueRecords(batch *pgx.Batch, origin Origin, generation int64, records map[string]Record) error {
 	for _, record := range records {

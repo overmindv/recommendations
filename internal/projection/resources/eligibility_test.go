@@ -132,7 +132,7 @@ func TestOwnerChecksAreBoundedAndDoNotReturnPartialApproval(t *testing.T) {
 		}
 	})
 	e := newEligibility(nil, check, check)
-	result, err := e.check(t.Context(), check, keys)
+	result, err := e.check(t.Context(), check.Available, keys)
 	if !errors.Is(err, ErrUnavailable) || result != nil || peak.Load() > 4 {
 		t.Fatal("owner failure leaked a partial allowlist or ran unbounded:", peak.Load(), err)
 	}

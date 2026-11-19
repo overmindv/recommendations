@@ -91,8 +91,9 @@ func TestTasksProjectionSwitchesSnapshotAndReplaysAtomically(t *testing.T) {
 		t.Fatal("a second writer reused an old checkpoint:", err)
 	}
 	state := readProgress(t, ctx, store, Tasks)
-	first := SnapshotPage{Watermark: 5, NextCursor: resourceID,
-		Records: []Record{testProjectionRecord(resourceID, 3, topicID, Tasks)}}
+	firstRecord := testProjectionRecord(resourceID, 3, topicID, Tasks)
+	firstRecord.Metadata.EstimatedMinutes = new(7)
+	first := SnapshotPage{Watermark: 5, NextCursor: resourceID, Records: []Record{firstRecord}}
 	if err := store.snapshotPage(ctx, state, first); err != nil {
 		t.Fatal(err)
 	}
@@ -115,8 +116,15 @@ func TestTasksProjectionSwitchesSnapshotAndReplaysAtomically(t *testing.T) {
 		t.Fatal("snapshot has not gone live:", state)
 	}
 	assertProjectedRow(t, ctx, restarted, state, resourceID, 3, true, 1)
+	const minutesSQL = `
+		SELECT diagnostic_minutes FROM resource_projection_topics WHERE origin='tasks' AND generation=$1 AND resource_id=$2`
+	var minutes *int
+	if err := store.pool.QueryRow(ctx, minutesSQL, state.Active, resourceID).Scan(&minutes); err != nil || minutes == nil || *minutes != 7 {
+		t.Fatal("estimate missing from diagnostic index:", minutes, err)
+	}
 
 	version := testProjectionRecord(resourceID, 6, otherTopic, Tasks)
+	version.Metadata.EstimatedMinutes = new(21)
 	if err := store.applyTasks(ctx, state, ChangePage{Watermark: 7, Through: 6, More: true,
 		Events: []Event{testProjectionEvent(sourceEventID, version)}}); err != nil {
 		t.Fatal(err)
@@ -130,6 +138,9 @@ func TestTasksProjectionSwitchesSnapshotAndReplaysAtomically(t *testing.T) {
 		WHERE origin = 'tasks' AND generation = $1 AND resource_id = $2`, state.Active, resourceID).Scan(&newTopic)
 	if err != nil || newTopic != otherTopic {
 		t.Fatal("updated task should replace old topic indexing:", newTopic, err)
+	}
+	if err := store.pool.QueryRow(ctx, minutesSQL, state.Active, resourceID).Scan(&minutes); err != nil || minutes != nil {
+		t.Fatal("long task remained in diagnostic index:", minutes, err)
 	}
 	version.Version, version.Metadata.Topics = 7, nil
 	if err := store.applyTasks(ctx, state, ChangePage{Watermark: 7, Through: 7,
