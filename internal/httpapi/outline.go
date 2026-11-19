@@ -11,7 +11,7 @@ import (
 	"github.com/overmindv/recommendations/internal/aiplan"
 )
 
-func outlineHandler(token string, engine *aiplan.Engine) http.Handler {
+func outlineHandler(token string, engine *aiplan.Engine, catalog ResourceCatalog) http.Handler {
 	expected := sha256.Sum256([]byte(token))
 	endpoint := http.TimeoutHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		kind, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
@@ -32,6 +32,17 @@ func outlineHandler(token string, engine *aiplan.Engine) http.Handler {
 		if err != nil {
 			writeJSON(w, 400, publicError{"INVALID_ARGUMENT", "Invalid input"})
 			return
+		}
+		if catalog != nil && len(out.TopicIDs) > 0 {
+			selected, err := catalog.OutlineMaterials(r.Context(), out.TopicIDs, in.CompletedMaterialIDs)
+			if err == nil && len(selected) > 0 {
+				materials := make([]aiplan.Material, 0, len(selected)+len(out.Materials))
+				for _, c := range selected {
+					materials = append(materials, materialForOutline(c))
+				}
+				materials = append(materials, out.Materials...)
+				out.Materials = materials[:min(8, len(materials))]
+			}
 		}
 		writeJSON(w, 200, out)
 	}), 27*time.Second, `{"code":"SERVICE_UNAVAILABLE","message":"Service unavailable"}`)

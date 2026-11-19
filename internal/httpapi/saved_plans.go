@@ -9,11 +9,16 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/overmindv/recommendations/internal/materialref"
 	"github.com/overmindv/recommendations/internal/planner"
 	"github.com/overmindv/recommendations/internal/savedplans"
 )
 
 func RegisterSavedPlans(router Router, token string, store savedplans.Store) {
+	RegisterVerifiedSavedPlans(router, token, store, nil)
+}
+
+func RegisterVerifiedSavedPlans(router Router, token string, store savedplans.Store, catalog ResourceCatalog) {
 	handle := func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Type", "application/json")
@@ -62,6 +67,11 @@ func RegisterSavedPlans(router Router, token string, store savedplans.Store) {
 					return
 				}
 			}
+			if id == "" || op == "refresh" {
+				if !verifySavedInput(w, r, catalog, &in) {
+					return
+				}
+			}
 			if id == "" {
 				result, err = store.Create(r.Context(), actor, in)
 			} else if op == "clone" {
@@ -85,10 +95,51 @@ func RegisterSavedPlans(router Router, token string, store savedplans.Store) {
 			writeJSON(w, status, publicError{code, "Unable to update plan"})
 			return
 		}
+		if plan, ok := result.(savedplans.Plan); ok {
+			if catalog != nil {
+				plan.Document, _ = filterSavedDocument(r.Context(), catalog, plan.Document, false)
+			} else {
+				plan.Document.Materials = externalMaterials(plan.Document.Materials)
+			}
+			result = plan
+		}
 		writeJSON(w, 200, result)
 	}
 	router.Handle("GET /v1/learning-plans", http.HandlerFunc(handle))
 	router.Handle("GET /v1/learning-plans/{id}", http.HandlerFunc(handle))
 	router.Handle("POST /v1/learning-plans", http.HandlerFunc(handle))
 	router.Handle("POST /v1/learning-plans/{id}/{op}", http.HandlerFunc(handle))
+}
+
+func verifySavedInput(w http.ResponseWriter, r *http.Request, catalog ResourceCatalog, in *savedplans.Input) bool {
+	if catalog == nil {
+		for _, m := range in.Document.Materials {
+			if materialref.Owned(m.ID) {
+				writeJSON(w, 400, publicError{"INVALID_ARGUMENT", "Invalid input"})
+				return false
+			}
+		}
+		return true
+	}
+	if err := savedplans.Validate(in.Document); err != nil {
+		writeJSON(w, 400, publicError{"INVALID_ARGUMENT", "Invalid input"})
+		return false
+	}
+	verified, err := filterSavedDocument(r.Context(), catalog, in.Document, true)
+	if err != nil {
+		writeJSON(w, 503, publicError{"SERVICE_UNAVAILABLE", "Service unavailable"})
+		return false
+	}
+	in.Document = verified
+	return true
+}
+
+func externalMaterials(in []savedplans.Material) []savedplans.Material {
+	out := make([]savedplans.Material, 0, len(in))
+	for _, m := range in {
+		if !materialref.Owned(m.ID) {
+			out = append(out, m)
+		}
+	}
+	return out
 }

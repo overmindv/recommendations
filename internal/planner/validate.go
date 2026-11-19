@@ -81,6 +81,9 @@ func Validate(in Request) error {
 		if !ValidID(task.ID) || !ValidID(task.TaskVersionID) || tasks[task.ID] || versions[task.TaskVersionID] || !topicExists || strings.TrimSpace(task.Title) == "" || !utf8.ValidString(task.Title) || len(task.Title) > 2000 || difficulty(task.Difficulty) == 0 {
 			return ErrInvalidInput
 		}
+		if task.CatalogMinutes < 0 || task.CatalogMinutes > 1440 {
+			return ErrInvalidInput
+		}
 		switch task.TaskType {
 		case "single_choice", "multiple_choice", "programming":
 		default:

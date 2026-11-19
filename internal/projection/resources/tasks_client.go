@@ -24,6 +24,8 @@ type TaskClient struct {
 	http  *http.Client
 }
 
+func (c *TaskClient) CloseIdleConnections() { c.http.CloseIdleConnections() }
+
 func NewTaskClient(address, token string) (*TaskClient, error) {
 	base, err := url.Parse(address)
 	if err != nil || base.Hostname() == "" || (base.Scheme != "http" && base.Scheme != "https") ||

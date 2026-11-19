@@ -7,6 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/overmindv/recommendations/internal/materialref"
 	"github.com/overmindv/recommendations/internal/planner"
 )
 
@@ -63,8 +64,7 @@ func Validate(d Document) error {
 	}
 	seen := map[string]bool{}
 	for _, m := range d.Materials {
-		u, e := url.Parse(m.URL)
-		if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || len(m.URL) > 2000 || m.ID == "" || len(m.ID) > 100 || seen[m.ID] || len(m.Title) > 2000 || len(m.Action) > 4000 || m.Minutes < 1 || !validStatus(m.Status) {
+		if !validMaterialURL(m) || len(m.URL) > 2000 || m.ID == "" || len(m.ID) > 100 || seen[m.ID] || len(m.Title) > 2000 || len(m.Action) > 4000 || m.Minutes < 1 || !validStatus(m.Status) {
 			return ErrInvalid
 		}
 		seen[m.ID] = true
@@ -83,6 +83,15 @@ func Validate(d Document) error {
 		}
 	}
 	return nil
+}
+
+func validMaterialURL(m Material) bool {
+	if materialref.Owned(m.ID) {
+		id, _, ok := materialref.Decode(m.ID)
+		return ok && m.URL == materialref.Path(id)
+	}
+	u, err := url.Parse(m.URL)
+	return err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil
 }
 func validStatus(s string) bool { return s == "TODO" || s == "IN_PROGRESS" || s == "DONE" }
 

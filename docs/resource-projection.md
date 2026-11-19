@@ -17,9 +17,30 @@ Inbox, состояние ресурса и позиция чтения запи
 активное поколение не меняется. Очистка затрагивает только снятые поколения,
 не больше 500 записей и 500 событий за проход.
 
-Клиенты владельцев умеют подтверждать точную версию пачкой до 100 пар.
-Проекция не заменяет эту проверку. Фоновые процессы и фильтр выдачи еще не
-подключены к запуску Recommendations.
+## Запуск
+
+Функция выключена по умолчанию. Для локального стека включи
+`RECOMMENDATIONS_RESOURCE_PROJECTION_ENABLED=true` и задай три отдельные
+учетные строки: `ENTITIES_SNAPSHOT_TOKEN`, `TASKS_RESOURCE_TOKEN` и
+`CONTENT_GRPC_CATALOG_TOKEN`. Compose передает каждый токен только владельцу
+и Recommendations. В Content должен быть включен поток
+`CONTENT_ACTIVITY_ENABLED`; его material topic совпадает с подпиской.
+Для открытия материалов в браузере Gateway использует отдельный
+`CONTENT_GRPC_SERVICE_TOKEN`, а не каталожный токен.
+
+Вне Compose задай `ENTITIES_URL`, `TASKS_RESOURCE_URL`,
+`CONTENT_CATALOG_ADDRESS`, `KAFKA_BOOTSTRAP_SERVERS` и `DATABASE_URL`.
+Для `ENV=production` нужны HTTPS, `grpcs://host:port` и
+`KAFKA_TLS_ENABLED=true`. При необходимости Kafka принимает CA, клиентские
+сертификаты и SASL через `KAFKA_TLS_*` и `KAFKA_SASL_*`.
+
+`/ready` отвечает успешно после загрузки трех снимков: тем, задач и материалов.
+`/v1/practice-plan` ранжирует подтвержденные версии и использует оценку
+времени из каталога. Версии, выбранные планировщиком, проверяются еще раз
+перед ответом. Если задача успела сменить версию, запрос можно повторить.
+В `/v1/learning-outline` подтвержденные материалы Content дополняют внешние
+ссылки по выбранным темам. В AI тексты и метаданные этих материалов не уходят.
+Детали сохраненного плана скрывают недоступные версии без удаления истории.
 
 ## Проверки
 
@@ -31,3 +52,9 @@ go run ./cmd/recommendations migrate --dir migrations --dsn "$RESOURCE_PROJECTIO
 make resource-ctest
 go test ./internal/projection/resources -run '^$' -bench BenchmarkResourceReplay -benchmem
 ```
+
+Для сквозной проверки старта собери `cmd/recommendations`, задай путь к бинарнику
+в `RESOURCE_RUNTIME_BINARY` и выполни
+`go test ./cmd/recommendations -run TestResourceRuntimeSmoke -count=1`.
+Нужна свежая тестовая БД после миграций. Тест использует настоящий брокер и
+PostgreSQL, а ответы владельцев подменяет, чтобы управлять доступностью версий.

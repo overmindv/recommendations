@@ -17,6 +17,9 @@ func recommendedLevel(accepted, failed int) int {
 }
 
 func estimatedMinutes(task Task) int {
+	if task.CatalogMinutes > 0 {
+		return task.CatalogMinutes
+	}
 	d := difficulty(task.Difficulty)
 	if task.TaskType == "programming" {
 		return []int{0, 20, 35, 50}[d]
