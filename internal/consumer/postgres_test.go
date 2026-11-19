@@ -4,10 +4,12 @@ import (
 	"crypto/rand"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/overmindv/content/pkg/api/activity"
 )
@@ -141,6 +143,55 @@ func TestPostgresEvidenceCorrectionAndWeightCap(t *testing.T) {
 			t.Fatal("unsafe event was not quarantined:", i, reason, err)
 		}
 	}
+}
+
+func TestPostgresEvidenceKeepsWeightsFromTaskVersion(t *testing.T) {
+	pool, ns := evidenceDB(t), namespace(t)
+	ctx := t.Context()
+	id := func(n int) string { return fixtureID(ns, n) }
+	first := outcomeFixture(ns, 1, 2, 3, 4)
+	first.Payload.Topics = []string{id(42), id(41)}
+	batch := &pgx.Batch{}
+	batch.Queue("UPDATE resource_projection_checkpoints SET active_generation=1 WHERE origin='tasks'")
+	batch.Queue(`INSERT INTO resource_projection_items (origin,generation,resource_id,version,revision_id,metadata)
+		VALUES ('tasks',1,$1,1,$2,'{}')`, id(4), id(40))
+	batch.Queue(`INSERT INTO resource_projection_topics (origin,generation,resource_id,topic_id,weight,diagnostic_minutes)
+		VALUES ('tasks',1,$1,$2,3,2), ('tasks',1,$1,$3,1,2)`, id(4), id(41), id(42))
+	if err := pool.SendBatch(ctx, batch).Close(); err != nil {
+		t.Fatal(err)
+	}
+	store := NewPostgres(pool)
+	apply := func(w taskEnvelope) {
+		t.Helper()
+		msg := decodeMessage(evidenceRecord(t, TasksTopic, w.AggregateID, time.Now().UnixNano(), w), activity.DefaultLearningTopic)
+		if msg.reject != "" {
+			t.Fatal("fixture rejected:", msg.reject)
+		}
+		if err := store.apply(ctx, []message{msg}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(submission string, want []int) {
+		t.Helper()
+		var got []int
+		if err := pool.QueryRow(ctx, "SELECT topic_weights FROM learning_task_outcomes WHERE submission_id=$1", submission).
+			Scan(&got); err != nil || !slices.Equal(got, want) {
+			t.Fatal("unexpected topic weights:", got, want, err)
+		}
+	}
+	apply(first)
+	check(first.Payload.SubmissionID, []int{3, 1})
+	if _, err := pool.Exec(ctx, `UPDATE resource_projection_items SET version=2,revision_id=$2
+		WHERE origin='tasks' AND generation=1 AND resource_id=$1`, id(4), id(43)); err != nil {
+		t.Fatal(err)
+	}
+	first.ID, first.Version, first.Payload.Correction, first.Payload.Verdict = id(5), 2, 2, "accepted"
+	apply(first)
+	check(first.Payload.SubmissionID, []int{3, 1})
+	next := outcomeFixture(ns, 6, 7, 3, 4)
+	next.Payload.Topics = first.Payload.Topics
+	apply(next)
+	check(next.Payload.SubmissionID, nil)
 }
 
 func BenchmarkPostgresEvidenceWrites(b *testing.B) {
