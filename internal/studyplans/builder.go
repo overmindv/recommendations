@@ -2,6 +2,8 @@ package studyplans
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -28,6 +30,19 @@ func NewProjectedBuilder(pool *pgxpool.Pool, resources ResourceSource, rankingPo
 }
 
 func (b *ProjectedBuilder) Build(ctx context.Context, actor, goal string, source Sources) (Draft, error) {
+	input, now, watermark, err := b.inputs(ctx, actor, goal, source, b.ranking, b.evidence)
+	if err != nil {
+		return Draft{}, err
+	}
+	plan, err := planner.BuildLearningPlan(ctx, now, input)
+	if err != nil {
+		return Draft{}, err
+	}
+	return Draft{Plan: plan, EvidenceWatermark: watermark, EvidencePolicy: b.evidence, ScopeTopics: slices.Sorted(maps.Keys(input.Topics))}, nil
+}
+
+func (b *ProjectedBuilder) inputs(ctx context.Context, actor, goal string, source Sources, rank ranking.Policy,
+	policy mastery.Policy) (planner.LearningRequest, time.Time, [32]byte, error) {
 	var topics map[string]ranking.Topic
 	var ids []string
 	var evidence mastery.PlanningEvidence
@@ -41,11 +56,11 @@ func (b *ProjectedBuilder) Build(ctx context.Context, actor, goal string, source
 		if err != nil {
 			return err
 		}
-		evidence, err = mastery.ReadPlanningEvidence(ctx, tx, actor, ids, b.evidence, now)
+		evidence, err = mastery.ReadPlanningEvidence(ctx, tx, actor, ids, policy, now)
 		return err
 	})
 	if err != nil {
-		return Draft{}, err
+		return planner.LearningRequest{}, time.Time{}, [32]byte{}, err
 	}
 	for _, score := range evidence.Topics {
 		if score.ScoreBPS == nil {
@@ -57,14 +72,10 @@ func (b *ProjectedBuilder) Build(ctx context.Context, actor, goal string, source
 	}
 	resources, err := b.resources.StudyResources(ctx, actor, goal, ids)
 	if err != nil {
-		return Draft{}, err
+		return planner.LearningRequest{}, time.Time{}, [32]byte{}, err
 	}
-	plan, err := planner.BuildLearningPlan(ctx, now, planner.LearningRequest{
+	return planner.LearningRequest{
 		TargetTopicIDs: source.TargetTopics, Topics: topics, Resources: resources, AllowedLanguages: source.AllowedLanguages,
-		Budget: source.Budget, Ranking: b.ranking,
-	})
-	if err != nil {
-		return Draft{}, err
-	}
-	return Draft{Plan: plan, EvidenceWatermark: evidence.Watermark, EvidencePolicy: b.evidence}, nil
+		Budget: source.Budget, Ranking: rank,
+	}, now, evidence.Watermark, nil
 }

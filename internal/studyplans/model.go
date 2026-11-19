@@ -60,6 +60,7 @@ type Draft struct {
 	Plan              planner.LearningPlan
 	EvidenceWatermark [32]byte
 	EvidencePolicy    mastery.Policy
+	ScopeTopics       []string
 }
 
 type Assessment struct {
@@ -69,9 +70,13 @@ type Assessment struct {
 
 type Item struct {
 	planner.StudyItem
-	Ordinal      int         `json:"ordinal"`
-	ActivityDone *time.Time  `json:"activity_completed_at,omitempty"`
-	Assessment   *Assessment `json:"assessment,omitempty"`
+	Ordinal         int         `json:"ordinal"`
+	ActivityStarted *time.Time  `json:"activity_started_at,omitempty"`
+	ActivityDone    *time.Time  `json:"activity_completed_at,omitempty"`
+	Assessment      *Assessment `json:"assessment,omitempty"`
+	evidenceSince   time.Time
+	hasReceipt      bool
+	observedGrade   bool
 }
 
 type Week struct {
@@ -107,4 +112,5 @@ type View struct {
 	NextStep            *int                      `json:"next_step"`
 	BlockedReason       string                    `json:"blocked_reason,omitempty"`
 	GoalDemonstrated    bool                      `json:"goal_demonstrated"`
+	scopeTopics         []string
 }

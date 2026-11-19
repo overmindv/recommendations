@@ -8,6 +8,7 @@ import (
 )
 
 func TestStudyPlansRequireExplicitPolicy(t *testing.T) {
+	t.Setenv("RECOMMENDATIONS_STUDY_ADAPTATION_ENABLED", "")
 	t.Setenv("RECOMMENDATIONS_STUDY_PLANS_ENABLED", "")
 	if cfg, err := loadStudyPlans(Config{}); err != nil || cfg != nil {
 		t.Fatal("study plans should be disabled by default:", cfg, err)
@@ -20,7 +21,8 @@ func TestStudyPlansRequireExplicitPolicy(t *testing.T) {
 	const policy = `{"policy_version":"test","target_bps":8000,"unknown_gap_bps":3000,"prerequisite_min_bps":7500,"medium_difficulty_bps":5000,"hard_difficulty_bps":9000,"weights":{"gap":1}}`
 	t.Setenv("RECOMMENDATIONS_STUDY_RANKING_POLICY", policy)
 	t.Setenv("RECOMMENDATIONS_STUDY_RECENT_WINDOW", "24h")
-	if cfg, err := loadStudyPlans(prerequisites); err != nil || cfg == nil || cfg.Recent != 24*time.Hour || cfg.Ranking.Version != "test" {
+	if cfg, err := loadStudyPlans(prerequisites); err != nil || cfg == nil || cfg.Recent != 24*time.Hour ||
+		cfg.Ranking.Version != "test" || cfg.AdaptationWindow != 0 {
 		t.Fatal("valid explicit policy rejected:", cfg, err)
 	}
 	for _, bad := range []string{"", "5m", "1h5ms", "721h"} {
@@ -30,6 +32,22 @@ func TestStudyPlansRequireExplicitPolicy(t *testing.T) {
 		}
 	}
 	t.Setenv("RECOMMENDATIONS_STUDY_RECENT_WINDOW", "24h")
+	t.Setenv("RECOMMENDATIONS_STUDY_ADAPTATION_ENABLED", "true")
+	for _, bad := range []string{"", "500ms", "1s1ms", "6m"} {
+		t.Setenv("RECOMMENDATIONS_STUDY_ADAPTATION_WINDOW", bad)
+		if _, err := loadStudyPlans(prerequisites); err == nil {
+			t.Fatal("invalid adaptation window accepted:", bad)
+		}
+	}
+	t.Setenv("RECOMMENDATIONS_STUDY_ADAPTATION_WINDOW", "20s")
+	if cfg, err := loadStudyPlans(prerequisites); err != nil || cfg.AdaptationWindow != 20*time.Second {
+		t.Fatal("explicit adaptation window rejected:", cfg, err)
+	}
+	t.Setenv("RECOMMENDATIONS_STUDY_PLANS_ENABLED", "")
+	if _, err := loadStudyPlans(prerequisites); err == nil {
+		t.Fatal("adaptation allowed without study plans")
+	}
+	t.Setenv("RECOMMENDATIONS_STUDY_PLANS_ENABLED", "true")
 	t.Setenv("RECOMMENDATIONS_STUDY_RANKING_POLICY", policy+" {}")
 	if _, err := loadStudyPlans(prerequisites); err == nil {
 		t.Fatal("trailing data accepted")

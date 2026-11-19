@@ -15,6 +15,7 @@ import (
 type StudyPlans interface {
 	Current(context.Context, string, string) (studyplans.View, error)
 	Generate(context.Context, string, string, studyplans.Generation) (studyplans.View, error)
+	StartActivity(context.Context, string, string, int64, int) (studyplans.View, error)
 	CompleteActivity(context.Context, string, string, int64, int) (studyplans.View, error)
 	Assess(context.Context, string, string, int64, int) (studyplans.View, error)
 }
@@ -69,7 +70,8 @@ func RegisterStudyPlans(router Router, token string, service StudyPlans) {
 			})
 		respondStudyPlan(w, view, err)
 	})
-	progress := func(assessment bool) http.HandlerFunc {
+	type progressWrite func(StudyPlans, context.Context, string, string, int64, int) (studyplans.View, error)
+	progress := func(write progressWrite) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			ordinal, err := strconv.Atoi(r.PathValue("ordinal"))
 			if err != nil || ordinal < 1 || ordinal > planner.MaxLearningItems || strconv.Itoa(ordinal) != r.PathValue("ordinal") {
@@ -83,17 +85,13 @@ func RegisterStudyPlans(router Router, token string, service StudyPlans) {
 				return
 			}
 			actor, goal := r.Header.Get("X-User-ID"), r.PathValue("id")
-			var view studyplans.View
-			if assessment {
-				view, err = service.Assess(r.Context(), actor, goal, input.PlanVersion, ordinal)
-			} else {
-				view, err = service.CompleteActivity(r.Context(), actor, goal, input.PlanVersion, ordinal)
-			}
+			view, err := write(service, r.Context(), actor, goal, input.PlanVersion, ordinal)
 			respondStudyPlan(w, view, err)
 		}
 	}
-	handle("PUT "+route+"/steps/{ordinal}/activity", progress(false))
-	handle("PUT "+route+"/steps/{ordinal}/assessment", progress(true))
+	handle("PUT "+route+"/steps/{ordinal}/start", progress(StudyPlans.StartActivity))
+	handle("PUT "+route+"/steps/{ordinal}/activity", progress(StudyPlans.CompleteActivity))
+	handle("PUT "+route+"/steps/{ordinal}/assessment", progress(StudyPlans.Assess))
 }
 
 func respondStudyPlan(w http.ResponseWriter, view studyplans.View, err error) {

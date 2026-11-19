@@ -134,14 +134,25 @@ func run() int {
 				}
 			}
 			if cfg.Evidence.Enabled {
+				evidenceStore := consumer.NewPostgres(pool)
+				if cfg.StudyPlans != nil && cfg.StudyPlans.AdaptationWindow > 0 {
+					evidenceStore, err = consumer.NewPostgresWithPlanChanges(pool, cfg.StudyPlans.AdaptationWindow, baselines)
+					if err != nil {
+						return err
+					}
+				}
 				options := append([]kgo.Opt{kgo.SeedBrokers(parker.EnvList("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")...)}, cfg.Evidence.KafkaOptions...)
-				worker := consumer.NewWorker(consumer.NewPostgres(pool), cfg.Evidence.ContentTopic, app.Logger(), options...)
+				worker := consumer.NewWorker(evidenceStore, cfg.Evidence.ContentTopic, app.Logger(), options...)
 				app.AddRunnable("learning-evidence", worker.Run)
 			}
 			if cfg.StudyPlans != nil {
 				planSource := resources.NewStudySource(verified, cfg.StudyPlans.Recent)
 				builder := studyplans.NewProjectedBuilder(pool, planSource, cfg.StudyPlans.Ranking, *cfg.Mastery)
-				studyService = studyplans.NewService(studyplans.NewPostgres(pool), builder)
+				studyStore := studyplans.NewPostgres(pool)
+				studyService = studyplans.NewService(studyStore, builder)
+				if cfg.StudyPlans.AdaptationWindow > 0 {
+					app.AddRunnable("study-plan-adaptation", studyplans.NewRebuildWorker(studyStore, builder, app.Logger()).Run)
+				}
 			}
 		}
 		httpapi.RegisterVerifiedAI(app.HTTP(), cfg.ServiceToken, engine, eligibility)

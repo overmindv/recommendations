@@ -151,20 +151,29 @@ func loadEvidence(ctx context.Context, tx pgx.Tx, actor string, until time.Time)
 }
 
 func saveSnapshot(ctx context.Context, tx pgx.Tx, snapshot Snapshot, used []evidence) error {
-	topics, err := json.Marshal(snapshot.Topics)
+	args, err := snapshotArgs(snapshot, used)
 	if err != nil {
 		return err
+	}
+	_, err = tx.Exec(ctx, saveSnapshotSQL, args...)
+	return err
+}
+
+func snapshotArgs(snapshot Snapshot, used []evidence) ([]any, error) {
+	topics, err := json.Marshal(snapshot.Topics)
+	if err != nil {
+		return nil, err
 	}
 	raw, err := json.Marshal(used)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	_, err = tx.Exec(ctx, `
+	return []any{snapshot.GoalID, snapshot.GoalVersion, snapshot.Policy.Revision, snapshot.ComputedAt, topics, raw, snapshot.Truncated}, nil
+}
+
+const saveSnapshotSQL = `
 		INSERT INTO mastery_baselines (goal_id,goal_version,policy_revision,computed_at,topics,evidence,truncated)
 		VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7)
 		ON CONFLICT (goal_id) DO UPDATE SET
 		    goal_version=EXCLUDED.goal_version, policy_revision=EXCLUDED.policy_revision,
-		    computed_at=EXCLUDED.computed_at, topics=EXCLUDED.topics, evidence=EXCLUDED.evidence, truncated=EXCLUDED.truncated`,
-		snapshot.GoalID, snapshot.GoalVersion, snapshot.Policy.Revision, snapshot.ComputedAt, topics, raw, snapshot.Truncated)
-	return err
-}
+		    computed_at=EXCLUDED.computed_at, topics=EXCLUDED.topics, evidence=EXCLUDED.evidence, truncated=EXCLUDED.truncated`

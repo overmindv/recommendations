@@ -41,10 +41,11 @@ func saveDraft(ctx context.Context, tx pgx.Tx, goal string, version int64, sourc
 	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO study_plan_versions (goal_id,version,goal_version,availability_version,reserved_minutes,target_topics,
-		    planner_version,ranking_algorithm,policy_version,ranking_policy,evidence_watermark,evidence_policy,calendar)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+		    planner_version,ranking_algorithm,policy_version,ranking_policy,evidence_watermark,evidence_policy,calendar,scope_topics)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,COALESCE($14::uuid[],'{}'))`,
 		goal, version, source.GoalVersion, source.AvailabilityVersion, source.Budget.ReservedMinutes, source.TargetTopics,
-		draft.Plan.Version, draft.Plan.RankingAlgorithm, draft.Plan.RankingPolicy.Version, policy, draft.EvidenceWatermark[:], evidencePolicy, cal)
+		draft.Plan.Version, draft.Plan.RankingAlgorithm, draft.Plan.RankingPolicy.Version, policy, draft.EvidenceWatermark[:], evidencePolicy, cal,
+		draft.ScopeTopics)
 	if err != nil {
 		return err
 	}
@@ -53,7 +54,7 @@ func saveDraft(ctx context.Context, tx pgx.Tx, goal string, version int64, sourc
 	}
 	count, err := tx.CopyFrom(ctx, pgx.Identifier{"study_plan_items"}, []string{
 		"goal_id", "plan_version", "ordinal", "week_number", "topic_id", "resource_id", "resource_version_id",
-		"kind", "stage", "estimated_minutes", "score", "score_components", "requires_checks",
+		"kind", "stage", "estimated_minutes", "score", "score_components", "requires_checks", "superseded",
 	}, pgx.CopyFromRows(rows))
 	if err != nil {
 		return err
@@ -108,7 +109,7 @@ func prepareDraft(goal string, version int64, source Sources, draft Draft) (cale
 			}
 			rows = append(rows, []any{
 				goal, version, int16(len(rows) + 1), int16(i + 1), item.TopicID, item.ID, item.RevisionID,
-				string(item.Kind), string(item.Stage), int16(item.Minutes), int32(item.Score), components, guards,
+				string(item.Kind), string(item.Stage), int16(item.Minutes), int32(item.Score), components, guards, item.Superseded,
 			})
 		}
 		if minutes != week.PlannedMinutes {
@@ -121,7 +122,7 @@ func prepareDraft(goal string, version int64, source Sources, draft Draft) (cale
 func validItem(item planner.StudyItem) bool {
 	if !planner.ValidID(item.TopicID) || !planner.ValidID(item.ID) || !planner.ValidID(item.RevisionID) ||
 		item.Minutes < 1 || item.Minutes > ranking.MaxMinutes || item.Score < 0 || item.Score > 50_000_000 ||
-		len(item.RequiresCheck) > ranking.MaxTopics {
+		len(item.RequiresCheck) > ranking.MaxTopics || (item.Superseded && item.Stage != planner.StudyCheck) {
 		return false
 	}
 	for _, topic := range item.RequiresCheck {
@@ -143,12 +144,13 @@ func readView(ctx context.Context, tx pgx.Tx, goal string, version int64, source
 	view := View{GoalID: goal, Version: version, Current: version == source.PlanVersion}
 	var rawPolicy, rawEvidencePolicy, rawCal, watermark []byte
 	var reserved int
+	var now time.Time
 	err := tx.QueryRow(ctx, `
 		SELECT goal_version,availability_version,reserved_minutes,target_topics,planner_version,ranking_algorithm,
-		       ranking_policy,evidence_watermark,evidence_policy,calendar,created_at
+		       ranking_policy,evidence_watermark,evidence_policy,calendar,created_at,statement_timestamp(),scope_topics
 		FROM study_plan_versions WHERE goal_id=$1 AND version=$2`, goal, version).
 		Scan(&view.GoalVersion, &view.AvailabilityVersion, &reserved, &view.TargetTopics, &view.PlannerVersion, &view.RankingAlgorithm,
-			&rawPolicy, &watermark, &rawEvidencePolicy, &rawCal, &view.CreatedAt)
+			&rawPolicy, &watermark, &rawEvidencePolicy, &rawCal, &view.CreatedAt, &now, &view.scopeTopics)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return View{}, ErrNotFound
 	}
@@ -177,7 +179,7 @@ func readView(ctx context.Context, tx pgx.Tx, goal string, version int64, source
 	if err := readItems(ctx, tx, source.actor, &view); err != nil {
 		return View{}, err
 	}
-	if err := describeProgress(ctx, tx, source.actor, &view); err != nil {
+	if err := describeProgress(ctx, tx, source.actor, &view, now); err != nil {
 		return View{}, err
 	}
 	return view, nil
@@ -186,9 +188,10 @@ func readView(ctx context.Context, tx pgx.Tx, goal string, version int64, source
 func readItems(ctx context.Context, tx pgx.Tx, actor string, view *View) error {
 	rows, err := tx.Query(ctx, `
 		SELECT i.ordinal,i.week_number,i.topic_id::text,i.resource_id::text,i.resource_version_id::text,
-		       i.kind,i.stage,i.estimated_minutes,i.score,i.score_components,i.requires_checks,a.completed_at,
-		       CASE WHEN p.event_id=proof.event_id AND p.correction_version=proof.correction_version THEN proof.verdict END,
-		       CASE WHEN p.event_id=proof.event_id AND p.correction_version=proof.correction_version THEN proof.graded_at END
+		       i.kind,i.stage,i.estimated_minutes,i.score,i.score_components,i.requires_checks,i.superseded,
+		       COALESCE(a.started_at,a.completed_at),a.completed_at,COALESCE(i.evidence_since,$4::timestamptz),p.ordinal IS NOT NULL,
+		       CASE WHEN valid.current THEN proof.verdict END,
+		       CASE WHEN valid.current THEN proof.graded_at END
 		FROM study_plan_items AS i
 		LEFT JOIN study_plan_activity AS a USING (goal_id,plan_version,ordinal)
 		LEFT JOIN study_plan_assessments AS p USING (goal_id,plan_version,ordinal)
@@ -199,7 +202,10 @@ func readItems(ctx context.Context, tx pgx.Tx, actor string, view *View) error {
 		      AND evidence_kind='independent' AND graded_at <= statement_timestamp()
 		    ORDER BY graded_at,submission_id LIMIT 1
 		) AS proof ON proof.submission_id=p.submission_id AND proof.task_version_id=i.resource_version_id
-		    AND i.topic_id=ANY(proof.topic_ids) AND proof.graded_at >= $4
+		    AND i.topic_id=ANY(proof.topic_ids) AND proof.graded_at >= COALESCE(i.evidence_since,$4::timestamptz)
+		CROSS JOIN LATERAL (
+		    SELECT i.superseded OR (p.event_id=proof.event_id AND p.correction_version=proof.correction_version) AS current
+		) AS valid
 		WHERE i.goal_id=$1 AND i.plan_version=$2 ORDER BY i.ordinal`, view.GoalID, view.Version, actor, view.CreatedAt)
 	if err != nil {
 		return err
@@ -212,7 +218,8 @@ func readItems(ctx context.Context, tx pgx.Tx, actor string, view *View) error {
 		var verdict *string
 		var gradedAt *time.Time
 		if err := rows.Scan(&item.Ordinal, &week, &item.TopicID, &item.ID, &item.RevisionID, &item.Kind, &item.Stage,
-			&item.Minutes, &item.Score, &rawScore, &item.RequiresCheck, &item.ActivityDone, &verdict, &gradedAt); err != nil {
+			&item.Minutes, &item.Score, &rawScore, &item.RequiresCheck, &item.Superseded, &item.ActivityStarted, &item.ActivityDone,
+			&item.evidenceSince, &item.hasReceipt, &verdict, &gradedAt); err != nil {
 			return err
 		}
 		if week < 1 || week > len(view.Weeks) {

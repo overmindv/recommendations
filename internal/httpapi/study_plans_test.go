@@ -34,6 +34,11 @@ func (s *studyRouteStub) CompleteActivity(_ context.Context, actor, goal string,
 	return studyplans.View{GoalID: goal, Version: version}, s.err
 }
 
+func (s *studyRouteStub) StartActivity(_ context.Context, actor, goal string, version int64, step int) (studyplans.View, error) {
+	s.actor, s.goal, s.last, s.version, s.step = actor, goal, "start", version, step
+	return studyplans.View{GoalID: goal, Version: version}, s.err
+}
+
 func (s *studyRouteStub) Assess(_ context.Context, actor, goal string, version int64, step int) (studyplans.View, error) {
 	s.actor, s.goal, s.last, s.version, s.step = actor, goal, "assessment", version, step
 	return studyplans.View{GoalID: goal, Version: version}, s.err
@@ -86,6 +91,10 @@ func TestStudyPlanRoutesAcceptOnlyVersionAndTrustedActor(t *testing.T) {
 	}
 	if res := send("GET", "", token, ""); res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"next_step":2`) {
 		t.Fatal("current plan did not include next step:", res.Code, res.Body.String())
+	}
+	if res := send("PUT", "/steps/2/start", token, `{"plan_version":1}`); res.Code != http.StatusOK ||
+		service.step != 2 || service.version != 1 || service.last != "start" {
+		t.Fatal("start was routed incorrectly:", res.Code, service)
 	}
 	if res := send("PUT", "/steps/2/activity", token, `{"plan_version":1}`); res.Code != http.StatusOK ||
 		service.step != 2 || service.version != 1 || service.last != "activity" {
