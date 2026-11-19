@@ -51,14 +51,14 @@ func loadResources(cfg Config) (Resources, error) {
 		!strings.HasPrefix(cfg.EntitiesURL, "https://")) {
 		return Resources{}, errors.New("resource projection requires encrypted catalog connections in production")
 	}
-	r.KafkaOptions, err = kafkaResourceOptions(production)
+	r.KafkaOptions, err = kafkaOptions(production)
 	if err != nil {
 		return Resources{}, err
 	}
 	return r, nil
 }
 
-func kafkaResourceOptions(production bool) ([]kgo.Opt, error) {
+func kafkaOptions(production bool) ([]kgo.Opt, error) {
 	encrypted, err := envSwitch("KAFKA_TLS_ENABLED")
 	if err != nil {
 		return nil, err
@@ -70,10 +70,10 @@ func kafkaResourceOptions(production bool) ([]kgo.Opt, error) {
 	mechanism := strings.ToUpper(strings.TrimSpace(os.Getenv("KAFKA_SASL_MECHANISM")))
 	user, password := os.Getenv("KAFKA_SASL_USERNAME"), os.Getenv("KAFKA_SASL_PASSWORD")
 	if (cert == "") != (key == "") || (!encrypted && (production || ca != "" || cert != "" || serverName != "" || mechanism != "")) {
-		return nil, errors.New("invalid resource Kafka TLS settings")
+		return nil, errors.New("invalid Kafka TLS settings")
 	}
 	if (mechanism == "" && (user != "" || password != "")) || (mechanism != "" && (user == "" || password == "")) {
-		return nil, errors.New("invalid resource Kafka SASL settings")
+		return nil, errors.New("invalid Kafka SASL settings")
 	}
 	opts := make([]kgo.Opt, 0, 2)
 	if encrypted {
@@ -81,18 +81,18 @@ func kafkaResourceOptions(production bool) ([]kgo.Opt, error) {
 		if ca != "" {
 			pem, err := os.ReadFile(ca)
 			if err != nil {
-				return nil, errors.New("could not read resource Kafka CA")
+				return nil, errors.New("could not read Kafka CA")
 			}
 			roots := x509.NewCertPool()
 			if !roots.AppendCertsFromPEM(pem) {
-				return nil, errors.New("invalid resource Kafka CA")
+				return nil, errors.New("invalid Kafka CA")
 			}
 			tlsConfig.RootCAs = roots
 		}
 		if cert != "" {
 			pair, err := tls.LoadX509KeyPair(cert, key)
 			if err != nil {
-				return nil, errors.New("invalid resource Kafka client certificate")
+				return nil, errors.New("invalid Kafka client certificate")
 			}
 			tlsConfig.Certificates = []tls.Certificate{pair}
 		}
@@ -107,7 +107,7 @@ func kafkaResourceOptions(production bool) ([]kgo.Opt, error) {
 	case "SCRAM-SHA-512":
 		opts = append(opts, kgo.SASL(scram.Auth{User: user, Pass: password}.AsSha512Mechanism()))
 	default:
-		return nil, errors.New("unsupported resource Kafka SASL mechanism")
+		return nil, errors.New("unsupported Kafka SASL mechanism")
 	}
 	return opts, nil
 }
