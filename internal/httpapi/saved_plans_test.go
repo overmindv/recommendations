@@ -18,26 +18,33 @@ type plansStub struct {
 func (s *plansStub) Get(_ context.Context, _, actor string) (savedplans.Plan, error) {
 	s.calls++
 	s.actor = actor
+
 	return savedplans.Plan{}, savedplans.ErrNotFound
 }
 func (s *plansStub) List(_ context.Context, actor string) ([]savedplans.Plan, error) {
 	s.calls++
 	s.actor = actor
+
 	return []savedplans.Plan{}, nil
 }
 func (s *plansStub) Create(context.Context, string, savedplans.Input) (savedplans.Plan, error) {
 	s.calls++
+
 	return savedplans.Plan{}, nil
 }
 func (s *plansStub) Change(context.Context, string, string, string, savedplans.Input) (savedplans.Plan, error) {
 	s.calls++
+
 	return savedplans.Plan{}, savedplans.ErrConflict
 }
 func (s *plansStub) Clone(context.Context, string, string, string) (savedplans.Plan, error) {
 	s.calls++
+
 	return savedplans.Plan{}, savedplans.ErrNotFound
 }
 func TestSavedPlanTransportAuthAndRevisionCodes(t *testing.T) {
+	t.Parallel()
+
 	id := "00000000-0000-4000-8000-000000000081"
 	s := &plansStub{}
 	mux := http.NewServeMux()
@@ -46,9 +53,9 @@ func TestSavedPlanTransportAuthAndRevisionCodes(t *testing.T) {
 		method, path, token, actor, body string
 		status                           int
 	}{
-		{"GET", "/v1/learning-plans/" + id, "", "", "", 403},
-		{"GET", "/v1/learning-plans/" + id, "token", "", "", 404},
-		{"GET", "/v1/learning-plans", "token", "", "", 403},
+		{http.MethodGet, "/v1/learning-plans/" + id, "", "", "", 403},
+		{http.MethodGet, "/v1/learning-plans/" + id, "token", "", "", 404},
+		{http.MethodGet, "/v1/learning-plans", "token", "", "", 403},
 		{"POST", "/v1/learning-plans/" + id + "/material", "token", "", `{}`, 403},
 		{"POST", "/v1/learning-plans/" + id + "/material", "token", id, `{"revision":1,"material_id":"python","status":"DONE"}`, 409},
 		{"POST", "/v1/learning-plans", "token", id, `{"id":"invalid"}`, 400},
@@ -63,7 +70,7 @@ func TestSavedPlanTransportAuthAndRevisionCodes(t *testing.T) {
 		}
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, r)
-		if w.Code != tc.status || w.Header().Get("Cache-Control") != "no-store" {
+		if w.Code != tc.status || w.Header().Get("Cache-Control") != noStoreCache {
 			t.Fatal(tc, w.Code, w.Body.String())
 		}
 	}

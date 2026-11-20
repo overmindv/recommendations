@@ -15,32 +15,36 @@ import (
 
 func RegisterSavedPlans(router Router, token string, store savedplans.Store) {
 	handle := func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", noStoreCache)
+		w.Header().Set("Content-Type", jsonContentType)
 		want := sha256.Sum256([]byte(token))
 		got := sha256.Sum256([]byte(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")))
 		if token == "" || len(r.Header.Values("Authorization")) != 1 || !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") || subtle.ConstantTimeCompare(want[:], got[:]) != 1 {
 			writeJSON(w, 403, publicError{"PERMISSION_DENIED", "Permission denied"})
+
 			return
 		}
 		actor := r.Header.Get("X-User-ID")
 		id := r.PathValue("id")
 		op := r.PathValue("op")
 		if len(r.Header.Values("X-User-ID")) > 1 || (actor != "" && !planner.ValidID(actor)) || (id != "" && !planner.ValidID(id)) {
-			writeJSON(w, 400, publicError{"INVALID_ARGUMENT", "Invalid input"})
+			writeJSON(w, 400, publicError{codeInvalidArgument, "Invalid input"})
+
 			return
 		}
-		if actor == "" && (r.Method != "GET" || id == "") {
+		if actor == "" && (r.Method != http.MethodGet || id == "") {
 			writeJSON(w, 403, publicError{"PERMISSION_DENIED", "Permission denied"})
+
 			return
 		}
 		if store == nil {
 			writeJSON(w, 503, publicError{"SERVICE_UNAVAILABLE", "Service unavailable"})
+
 			return
 		}
 		var result any
 		var err error
-		if r.Method == "GET" {
+		if r.Method == http.MethodGet {
 			if id == "" {
 				result, err = store.List(r.Context(), actor)
 			} else {
@@ -53,18 +57,20 @@ func RegisterSavedPlans(router Router, token string, store savedplans.Store) {
 			var in savedplans.Input
 			var extra any
 			if d.Decode(&in) != nil || d.Decode(&extra) != io.EOF {
-				writeJSON(w, 400, publicError{"INVALID_ARGUMENT", "Invalid input"})
+				writeJSON(w, 400, publicError{codeInvalidArgument, "Invalid input"})
+
 				return
 			}
-			if id == "" || op == "clone" {
+			if id == "" || op == cloneOperation {
 				if !planner.ValidID(in.ID) {
-					writeJSON(w, 400, publicError{"INVALID_ARGUMENT", "Invalid input"})
+					writeJSON(w, 400, publicError{codeInvalidArgument, "Invalid input"})
+
 					return
 				}
 			}
 			if id == "" {
 				result, err = store.Create(r.Context(), actor, in)
-			} else if op == "clone" {
+			} else if op == cloneOperation {
 				result, err = store.Clone(r.Context(), id, actor, in.ID)
 			} else {
 				result, err = store.Change(r.Context(), id, actor, op, in)
@@ -78,11 +84,12 @@ func RegisterSavedPlans(router Router, token string, store savedplans.Store) {
 			case errors.Is(err, savedplans.ErrConflict):
 				code, status = "CONFLICT", 409
 			case errors.Is(err, savedplans.ErrInvalid):
-				code, status = "INVALID_ARGUMENT", 400
+				code, status = codeInvalidArgument, 400
 			case errors.Is(err, savedplans.ErrLimit):
 				code, status = "LIMIT_REACHED", 429
 			}
 			writeJSON(w, status, publicError{code, "Unable to update plan"})
+
 			return
 		}
 		writeJSON(w, 200, result)

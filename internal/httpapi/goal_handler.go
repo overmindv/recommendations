@@ -38,8 +38,9 @@ func NewGoalHandler(token string, store goals.Store) http.Handler {
 			}
 		case http.MethodPut:
 			mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-			if err != nil || mediaType != "application/json" {
-				writeJSON(w, http.StatusUnsupportedMediaType, publicError{"INVALID_ARGUMENT", "Expected application/json"})
+			if err != nil || mediaType != jsonContentType {
+				writeJSON(w, http.StatusUnsupportedMediaType, publicError{codeInvalidArgument, "Expected application/json"})
+
 				return
 			}
 			r.Body = http.MaxBytesReader(w, r.Body, MaxGoalBodyBytes)
@@ -59,34 +60,40 @@ func NewGoalHandler(token string, store goals.Store) http.Handler {
 				err = goals.Validate(input)
 			}
 			if err != nil {
-				writeJSON(w, http.StatusBadRequest, publicError{"INVALID_ARGUMENT", "Invalid practice goal"})
+				writeJSON(w, http.StatusBadRequest, publicError{codeInvalidArgument, "Invalid practice goal"})
+
 				return
 			}
 			goal, err := store.Save(r.Context(), userID, input)
 			if err != nil {
 				writeJSON(w, http.StatusServiceUnavailable, publicError{"SERVICE_UNAVAILABLE", "Service unavailable"})
+
 				return
 			}
 			writeJSON(w, http.StatusOK, goal)
 		case http.MethodDelete:
 			if err := store.Delete(r.Context(), userID); err != nil {
 				writeJSON(w, http.StatusServiceUnavailable, publicError{"SERVICE_UNAVAILABLE", "Service unavailable"})
+
 				return
 			}
 			w.WriteHeader(http.StatusNoContent)
 		default:
-			writeJSON(w, http.StatusMethodNotAllowed, publicError{"INVALID_ARGUMENT", "Method not allowed"})
+			writeJSON(w, http.StatusMethodNotAllowed, publicError{codeInvalidArgument, "Method not allowed"})
 		}
 	}), 3*time.Second, `{"code":"SERVICE_UNAVAILABLE","message":"Service unavailable"}`)
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", noStoreCache)
+		w.Header().Set("Content-Type", jsonContentType)
 		if !authorized(r, token, expected) {
 			writeJSON(w, http.StatusForbidden, publicError{"PERMISSION_DENIED", "Permission denied"})
+
 			return
 		}
 		if store == nil {
 			writeJSON(w, http.StatusServiceUnavailable, publicError{"SERVICE_UNAVAILABLE", "Service unavailable"})
+
 			return
 		}
 		endpoint.ServeHTTP(w, r)

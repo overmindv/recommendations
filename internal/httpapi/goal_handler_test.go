@@ -14,6 +14,8 @@ import (
 	"github.com/overmindv/recommendations/internal/goals"
 )
 
+const otherActorID = "00000000-0000-0000-0000-000000000002"
+
 type memoryGoals struct {
 	mu    sync.Mutex
 	items map[string]goals.Goal
@@ -26,6 +28,7 @@ func (m *memoryGoals) Get(_ context.Context, userID string) (goals.Goal, error) 
 	if !ok {
 		return goals.Goal{}, goals.ErrNotFound
 	}
+
 	return goal, nil
 }
 
@@ -38,6 +41,7 @@ func (m *memoryGoals) Save(_ context.Context, userID string, input goals.Input) 
 	goal.Revision++
 	goal.UpdatedAt = time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)
 	m.items[userID] = goal
+
 	return goal, nil
 }
 
@@ -45,6 +49,7 @@ func (m *memoryGoals) Delete(_ context.Context, userID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.items, userID)
+
 	return nil
 }
 
@@ -53,19 +58,23 @@ func goalRequest(method, body, userID string) *http.Request {
 	r.Header.Set("Authorization", "Bearer "+token)
 	r.Header.Set("X-User-ID", userID)
 	if method == http.MethodPut {
-		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Content-Type", jsonContentType)
 	}
+
 	return r
 }
 
 func TestGoalLifecycleAndActorIsolation(t *testing.T) {
+	t.Parallel()
+
 	store := &memoryGoals{items: map[string]goals.Goal{}}
 	h := NewGoalHandler(token, store)
-	other := "00000000-0000-0000-0000-000000000002"
+	other := otherActorID
 	request := func(method, body, userID string) *httptest.ResponseRecorder {
 		t.Helper()
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, goalRequest(method, body, userID))
+
 		return w
 	}
 	if w := request(http.MethodGet, "", actor); w.Code != 404 {
@@ -96,6 +105,8 @@ func TestGoalLifecycleAndActorIsolation(t *testing.T) {
 }
 
 func TestGoalInputAndAuthentication(t *testing.T) {
+	t.Parallel()
+
 	h := NewGoalHandler(token, &memoryGoals{items: map[string]goals.Goal{}})
 	for name, body := range map[string]string{
 		"null":            "null",
@@ -104,6 +115,8 @@ func TestGoalInputAndAuthentication(t *testing.T) {
 		"trailing JSON":   `{"topic_ids":["00000000-0000-0000-0000-000000000003"],"minutes":60}{}`,
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			w := httptest.NewRecorder()
 			h.ServeHTTP(w, goalRequest(http.MethodPut, body, actor))
 			if w.Code != 400 || strings.Contains(w.Body.String(), "secret") {
@@ -117,6 +130,8 @@ func TestGoalInputAndAuthentication(t *testing.T) {
 		"wrong token":     func(r *http.Request) { r.Header.Set("Authorization", "Bearer wrong") },
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			r := goalRequest(http.MethodGet, "", actor)
 			mutate(r)
 			w := httptest.NewRecorder()
@@ -135,6 +150,8 @@ func (f *failingGoals) Get(context.Context, string) (goals.Goal, error) {
 }
 
 func TestGoalDatabaseErrorIsGeneric(t *testing.T) {
+	t.Parallel()
+
 	w := httptest.NewRecorder()
 	NewGoalHandler(token, &failingGoals{}).ServeHTTP(w, goalRequest(http.MethodGet, "", actor))
 	if w.Code != 503 || strings.Contains(w.Body.String(), "secret") {
@@ -143,6 +160,8 @@ func TestGoalDatabaseErrorIsGeneric(t *testing.T) {
 }
 
 func TestGoalWithoutDatabaseIsUnavailable(t *testing.T) {
+	t.Parallel()
+
 	w := httptest.NewRecorder()
 	NewGoalHandler(token, nil).ServeHTTP(w, goalRequest(http.MethodGet, "", actor))
 	if w.Code != 503 || !strings.Contains(w.Body.String(), "SERVICE_UNAVAILABLE") {
