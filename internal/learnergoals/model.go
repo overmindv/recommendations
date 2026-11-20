@@ -13,6 +13,8 @@ import (
 	"github.com/overmindv/recommendations/internal/planner"
 )
 
+const levelUnknown = "unknown"
+
 const (
 	MaxWeeklyMinutes = 7 * 24 * 60
 	MaxGoals         = 32
@@ -100,6 +102,7 @@ func (in AvailabilityInput) validate() error {
 	if _, err := time.LoadLocation(in.Timezone); err != nil {
 		return ErrInvalid
 	}
+
 	return nil
 }
 
@@ -123,7 +126,7 @@ func normalize(in Input) (Input, error) {
 		if !planner.ValidID(id) || levels[id] != "" {
 			return Input{}, ErrInvalid
 		}
-		levels[id] = "unknown"
+		levels[id] = levelUnknown
 	}
 	if len(in.SelfAssessments) > len(in.TargetTopics) {
 		return Input{}, ErrInvalid
@@ -134,7 +137,7 @@ func normalize(in Input) (Input, error) {
 			return Input{}, ErrInvalid
 		}
 		switch entry.Level {
-		case "unknown", "beginner", "intermediate", "advanced":
+		case levelUnknown, "beginner", "intermediate", "advanced":
 			levels[entry.TopicID], seen[entry.TopicID] = entry.Level, true
 		default:
 			return Input{}, ErrInvalid
@@ -146,6 +149,7 @@ func normalize(in Input) (Input, error) {
 	}
 	in.Languages = append([]string{}, in.Languages...)
 	in.Formats = append([]string{}, in.Formats...)
+
 	return in, nil
 }
 
@@ -160,6 +164,7 @@ func validLabels(values []string) bool {
 		}
 		seen[value] = true
 	}
+
 	return true
 }
 
@@ -171,5 +176,6 @@ func checkDeadline(in Input, availability Availability, now time.Time) error {
 	if err != nil || in.Deadline < now.In(location).Format(dateLayout) {
 		return ErrInvalid
 	}
+
 	return nil
 }
