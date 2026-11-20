@@ -29,6 +29,7 @@ func scan(row pgx.Row) (Plan, error) {
 		return p, err
 	}
 	err = json.Unmarshal(raw, &p.Document)
+
 	return p, err
 }
 
@@ -36,6 +37,7 @@ const columns = "id, owner_id, document, is_public, revision"
 
 func (p *Postgres) Get(ctx context.Context, id, actor string) (Plan, error) {
 	plan, err := scan(p.Pool.QueryRow(ctx, "SELECT "+columns+" FROM saved_learning_plans WHERE id=$1 AND (owner_id::text=$2 OR is_public)", id, actor))
+
 	return Expose(plan, actor), err
 }
 func (p *Postgres) List(ctx context.Context, actor string) ([]Plan, error) {
@@ -52,6 +54,7 @@ func (p *Postgres) List(ctx context.Context, actor string) ([]Plan, error) {
 		}
 		result = append(result, Summary(Expose(plan, actor)))
 	}
+
 	return result, rows.Err()
 }
 func (p *Postgres) Create(ctx context.Context, actor string, in Input) (Plan, error) {
@@ -74,6 +77,7 @@ func (p *Postgres) Create(ctx context.Context, actor string, in Input) (Plan, er
 	if err = tx.Commit(ctx); err != nil {
 		return Plan{}, err
 	}
+
 	return plan, nil
 }
 func create(ctx context.Context, tx pgx.Tx, actor string, in Input) (Plan, error) {
@@ -86,6 +90,7 @@ func create(ctx context.Context, tx pgx.Tx, actor string, in Input) (Plan, error
 		if existing.Owner != actor {
 			return Plan{}, ErrNotFound
 		}
+
 		return Expose(existing, actor), nil
 	}
 	if !errors.Is(err, ErrNotFound) {
@@ -103,6 +108,7 @@ func create(ctx context.Context, tx pgx.Tx, actor string, in Input) (Plan, error
 	if err != nil {
 		return Plan{}, err
 	}
+
 	return Expose(plan, actor), nil
 }
 func (p *Postgres) Change(ctx context.Context, id, actor, op string, in Input) (Plan, error) {
@@ -169,6 +175,7 @@ func (p *Postgres) Change(ctx context.Context, id, actor, op string, in Input) (
 	if err = tx.Commit(ctx); err != nil {
 		return Plan{}, err
 	}
+
 	return Expose(plan, actor), nil
 }
 
@@ -189,5 +196,6 @@ func (p *Postgres) Clone(ctx context.Context, id, actor, newID string) (Plan, er
 	if err = tx.Commit(ctx); err != nil {
 		return Plan{}, err
 	}
+
 	return plan, nil
 }

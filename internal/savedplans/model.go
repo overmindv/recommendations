@@ -10,6 +10,11 @@ import (
 	"github.com/overmindv/recommendations/internal/planner"
 )
 
+const (
+	statusTODO = "TODO"
+	statusDone = "DONE"
+)
+
 var ErrNotFound = errors.New("plan not found")
 var ErrConflict = errors.New("plan revision conflict")
 var ErrInvalid = errors.New("invalid plan")
@@ -82,9 +87,10 @@ func Validate(d Document) error {
 			return ErrInvalid
 		}
 	}
+
 	return nil
 }
-func validStatus(s string) bool { return s == "TODO" || s == "IN_PROGRESS" || s == "DONE" }
+func validStatus(s string) bool { return s == statusTODO || s == "IN_PROGRESS" || s == statusDone }
 
 // Reset не переносит отметки автора в публичный ответ или копию.
 func Reset(d Document) Document {
@@ -93,11 +99,12 @@ func Reset(d Document) Document {
 	d.TopicIDs = append([]string{}, d.TopicIDs...)
 	d.ExcludedTaskIDs = append([]string{}, d.ExcludedTaskIDs...)
 	for i := range d.Materials {
-		d.Materials[i].Status = "TODO"
+		d.Materials[i].Status = statusTODO
 	}
 	for i := range d.Tasks {
 		d.Tasks[i].Completed = false
 	}
+
 	return d
 }
 func Expose(p Plan, actor string) Plan {
@@ -105,6 +112,7 @@ func Expose(p Plan, actor string) Plan {
 	if !p.IsOwner {
 		p.Document = Reset(p.Document)
 	}
+
 	return p
 }
 
@@ -140,6 +148,7 @@ func Merge(old, next Document) (Document, error) {
 	old.Materials = materials
 	old.Tasks = tasks
 	old.TopicIDs = next.TopicIDs
+
 	return old, Validate(old)
 }
 
@@ -158,5 +167,6 @@ func Summary(p Plan) Plan {
 		d.Tasks[i] = Task{ID: d.Tasks[i].ID}
 	}
 	p.Document = d
+
 	return p
 }

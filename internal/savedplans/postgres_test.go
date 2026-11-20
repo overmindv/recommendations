@@ -11,7 +11,10 @@ import (
 )
 
 // Требует отдельной БД с применёнными миграциями; Docker автоматически не запускается.
+//
+//nolint:paralleltest // component test использует общую выделенную PostgreSQL
 func TestPostgresPlanLifecycle(t *testing.T) {
+
 	dsn := os.Getenv("SAVED_PLANS_TEST_DSN")
 	if dsn == "" {
 		t.Skip("SAVED_PLANS_TEST_DSN is not set")
@@ -35,7 +38,7 @@ func TestPostgresPlanLifecycle(t *testing.T) {
 		_, _ = pool.Exec(ctx, "DELETE FROM saved_learning_plans WHERE id=ANY($1::uuid[])", []string{id, copyID})
 	}()
 	p, err := store.Create(ctx, owner, Input{ID: id, Document: sample()})
-	if err != nil || p.Public || !p.IsOwner || p.Document.Materials[0].Status != "TODO" {
+	if err != nil || p.Public || !p.IsOwner || p.Document.Materials[0].Status != statusTODO {
 		t.Fatal(p, err)
 	}
 	if _, err = store.Get(ctx, id, other); !errors.Is(err, ErrNotFound) {
@@ -44,11 +47,11 @@ func TestPostgresPlanLifecycle(t *testing.T) {
 	if _, err = store.Change(ctx, id, other, "visibility", Input{Revision: 1, Public: true}); !errors.Is(err, ErrNotFound) {
 		t.Fatal("cross-owner write")
 	}
-	p, err = store.Change(ctx, id, owner, "material", Input{Revision: p.Revision, MaterialID: "python", Status: "DONE"})
+	p, err = store.Change(ctx, id, owner, "material", Input{Revision: p.Revision, MaterialID: "python", Status: statusDone})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.Change(ctx, id, owner, "material", Input{Revision: 1, MaterialID: "python", Status: "TODO"}); !errors.Is(err, ErrConflict) {
+	if _, err = store.Change(ctx, id, owner, "material", Input{Revision: 1, MaterialID: "python", Status: statusTODO}); !errors.Is(err, ErrConflict) {
 		t.Fatal("stale write accepted")
 	}
 	p, err = store.Change(ctx, id, owner, "visibility", Input{Revision: p.Revision, Public: true})
@@ -56,11 +59,11 @@ func TestPostgresPlanLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	public, err := store.Get(ctx, id, "")
-	if err != nil || public.IsOwner || public.Document.Materials[0].Status != "TODO" {
+	if err != nil || public.IsOwner || public.Document.Materials[0].Status != statusTODO {
 		t.Fatal("public progress leaked")
 	}
 	clone, err := store.Clone(ctx, id, other, copyID)
-	if err != nil || clone.Public || clone.Document.Materials[0].Status != "TODO" {
+	if err != nil || clone.Public || clone.Document.Materials[0].Status != statusTODO {
 		t.Fatal(clone, err)
 	}
 	p, err = store.Change(ctx, id, owner, "visibility", Input{Revision: p.Revision, Public: false})
