@@ -41,6 +41,7 @@ func main() {
 		}
 		httpapi.RegisterGoals(app.HTTP(), cfg.ServiceToken, store)
 		httpapi.RegisterSavedPlans(app.HTTP(), cfg.ServiceToken, plans)
+
 		return nil
 	}, parker.WithAppName("recommendations"), func(o *parker.Options) { o.HTTPAddress = cfg.HTTPAddress; o.WriteTimeout = 35 * time.Second }))
 }
