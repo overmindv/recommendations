@@ -27,15 +27,18 @@ func build(t *testing.T, in Request) Plan {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	return got
 }
 
 func TestColdStartAndBudget(t *testing.T) {
+	t.Parallel()
+
 	in := base()
-	in.Tasks = append(in.Tasks, task(102, 1, "hard", "single_choice"), task(103, 1, "easy", "programming"))
+	in.Tasks = append(in.Tasks, task(102, 1, difficultyHard, "single_choice"), task(103, 1, "easy", taskTypeProgramming))
 	in.Minutes = 20
 	got := build(t, in)
-	if got.PolicyVersion != "practice-v3" || got.TotalMinutes != 10 || len(got.Items) != 1 || got.Items[0].TaskID != id(101) || got.Items[0].ReasonCode != "START_TOPIC" {
+	if got.PolicyVersion != "practice-v3" || got.TotalMinutes != 10 || len(got.Items) != 1 || got.Items[0].TaskID != id(101) || got.Items[0].ReasonCode != reasonStartTopic {
 		t.Fatalf("unexpected plan: %+v", got)
 	}
 	if len(got.Warnings) != 0 {
@@ -44,18 +47,22 @@ func TestColdStartAndBudget(t *testing.T) {
 }
 
 func TestPrerequisiteReadinessUsesDistinctCurrentAccepted(t *testing.T) {
+	t.Parallel()
+
 	for _, count := range []int{0, 1, 2, 3} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			t.Parallel()
+
 			in := base()
 			in.TopicIDs = []string{id(2)}
 			in.Topics = append(in.Topics, Topic{ID: id(2), PrerequisiteIDs: []string{id(1)}})
 			in.Tasks = []Task{task(101, 1, "easy", "single_choice"), task(102, 1, "easy", "single_choice"), task(103, 1, "easy", "single_choice"), task(104, 1, "easy", "single_choice"), task(201, 2, "easy", "single_choice")}
 			for i := 0; i < count; i++ {
 				for repeat := 0; repeat < 10; repeat++ {
-					in.Evidence = append(in.Evidence, evidence(in.Tasks[i], "accepted"))
+					in.Evidence = append(in.Evidence, evidence(in.Tasks[i], verdictAccepted))
 				}
 			}
-			old := evidence(in.Tasks[3], "accepted")
+			old := evidence(in.Tasks[3], verdictAccepted)
 			old.TaskVersionID = id(9999)
 			in.Evidence = append(in.Evidence, old)
 			got := build(t, in)
@@ -63,7 +70,7 @@ func TestPrerequisiteReadinessUsesDistinctCurrentAccepted(t *testing.T) {
 				t.Fatal("expected available practice")
 			}
 			for _, item := range got.Items {
-				if count < 3 && (item.TopicID != id(1) || item.ReasonCode != "PREREQUISITE") {
+				if count < 3 && (item.TopicID != id(1) || item.ReasonCode != reasonPrerequisite) {
 					t.Fatalf("dependent topic unlocked early: %+v", got)
 				}
 				if count == 3 && item.TopicID != id(2) {
@@ -78,12 +85,14 @@ func TestPrerequisiteReadinessUsesDistinctCurrentAccepted(t *testing.T) {
 }
 
 func TestTransitivePrerequisitesAndPlanAreNotEvidence(t *testing.T) {
+	t.Parallel()
+
 	in := base()
 	in.TopicIDs = []string{id(3)}
 	in.Topics = append(in.Topics, Topic{ID: id(2), PrerequisiteIDs: []string{id(1)}}, Topic{ID: id(3), PrerequisiteIDs: []string{id(2)}})
 	in.Tasks = []Task{task(101, 1, "easy", "single_choice"), task(102, 1, "easy", "single_choice"), task(103, 1, "easy", "single_choice"), task(201, 2, "easy", "single_choice"), task(202, 2, "easy", "single_choice"), task(203, 2, "easy", "single_choice"), task(301, 3, "easy", "single_choice")}
 	for i := 3; i < 6; i++ {
-		in.Evidence = append(in.Evidence, evidence(in.Tasks[i], "accepted"))
+		in.Evidence = append(in.Evidence, evidence(in.Tasks[i], verdictAccepted))
 	}
 	got := build(t, in)
 	if len(got.Items) != 3 {
@@ -97,31 +106,39 @@ func TestTransitivePrerequisitesAndPlanAreNotEvidence(t *testing.T) {
 }
 
 func TestEvidenceSemantics(t *testing.T) {
-	neutral := []string{"infrastructure_error", "checker_error", "cancelled"}
+	t.Parallel()
+
+	neutral := []string{"infrastructure_error", "checker_error", "canceled"}
 	for _, verdict := range neutral {
 		t.Run(verdict, func(t *testing.T) {
+			t.Parallel()
+
 			in := base()
 			in.Evidence = []Evidence{evidence(in.Tasks[0], verdict)}
 			got := build(t, in)
-			if got.Items[0].ReasonCode != "START_TOPIC" {
+			if got.Items[0].ReasonCode != reasonStartTopic {
 				t.Fatalf("neutral verdict changed cold start: %+v", got)
 			}
 		})
 	}
-	for _, verdict := range []string{"wrong_answer", "compilation_error", "runtime_error", "time_limit_exceeded", "memory_limit_exceeded", "output_limit_exceeded"} {
+	for _, verdict := range []string{"wrong_answer", verdictCompilationError, "runtime_error", "time_limit_exceeded", "memory_limit_exceeded", "output_limit_exceeded"} {
 		t.Run(verdict, func(t *testing.T) {
+			t.Parallel()
+
 			in := base()
 			in.Tasks = append(in.Tasks, task(102, 1, "easy", "single_choice"))
 			in.Evidence = []Evidence{evidence(in.Tasks[1], verdict)}
 			got := build(t, in)
-			if got.Items[0].TaskID != id(101) || got.Items[0].ReasonCode != "PRACTICE_GAP" || got.Items[1].TaskID != id(102) {
+			if got.Items[0].TaskID != id(101) || got.Items[0].ReasonCode != reasonPracticeGap || got.Items[1].TaskID != id(102) {
 				t.Fatalf("expected fresh practice before a failed task: %+v", got)
 			}
 		})
 	}
 	t.Run("accepted remains solved", func(t *testing.T) {
+		t.Parallel()
+
 		in := base()
-		old := evidence(in.Tasks[0], "accepted")
+		old := evidence(in.Tasks[0], verdictAccepted)
 		wrong := evidence(in.Tasks[0], "wrong_answer")
 		wrong.OccurredAt = wrong.OccurredAt.Add(time.Hour)
 		in.Evidence = []Evidence{old, wrong}
@@ -131,59 +148,67 @@ func TestEvidenceSemantics(t *testing.T) {
 		}
 	})
 	t.Run("old version ignored", func(t *testing.T) {
+		t.Parallel()
+
 		in := base()
-		old := evidence(in.Tasks[0], "accepted")
+		old := evidence(in.Tasks[0], verdictAccepted)
 		old.TaskVersionID = id(9999)
 		in.Evidence = []Evidence{old}
 		got := build(t, in)
-		if len(got.Items) != 1 || got.Items[0].ReasonCode != "START_TOPIC" {
+		if len(got.Items) != 1 || got.Items[0].ReasonCode != reasonStartTopic {
 			t.Fatalf("old version used: %+v", got)
 		}
 	})
 }
 
 func TestDifficultyProgressionAndWrongAnswerFallback(t *testing.T) {
+	t.Parallel()
+
 	in := base()
 	in.Tasks = nil
 	for i := 101; i < 107; i++ {
 		task := task(i, 1, "easy", "single_choice")
 		in.Tasks = append(in.Tasks, task)
-		in.Evidence = append(in.Evidence, evidence(task, "accepted"))
+		in.Evidence = append(in.Evidence, evidence(task, verdictAccepted))
 	}
-	in.Tasks = append(in.Tasks, task(201, 1, "easy", "single_choice"), task(202, 1, "medium", "single_choice"), task(203, 1, "hard", "single_choice"))
+	in.Tasks = append(in.Tasks, task(201, 1, "easy", "single_choice"), task(202, 1, "medium", "single_choice"), task(203, 1, difficultyHard, "single_choice"))
 	got := build(t, in)
-	if got.Items[0].TaskID != id(203) || got.Items[0].ReasonCode != "NEXT_CHALLENGE" {
+	if got.Items[0].TaskID != id(203) || got.Items[0].ReasonCode != reasonNextChallenge {
 		t.Fatalf("expected harder challenge: %+v", got)
 	}
 	in.Evidence = append(in.Evidence, evidence(in.Tasks[8], "wrong_answer"))
 	got = build(t, in)
-	if got.Items[0].TaskID != id(202) || got.Items[0].ReasonCode != "PRACTICE_GAP" || got.Items[1].TaskID != id(201) {
+	if got.Items[0].TaskID != id(202) || got.Items[0].ReasonCode != reasonPracticeGap || got.Items[1].TaskID != id(201) {
 		t.Fatalf("expected fresh suitable practice after a failed hard task: %+v", got)
 	}
 	for _, item := range got.Items {
-		if item.Difficulty == "hard" {
+		if item.Difficulty == difficultyHard {
 			t.Fatal("hard task retained after gap")
 		}
 	}
 }
 
 func TestFailedTaskRemainsFallback(t *testing.T) {
+	t.Parallel()
+
 	in := base()
 	in.Evidence = []Evidence{evidence(in.Tasks[0], "wrong_answer")}
 	got := build(t, in)
-	if len(got.Items) != 1 || got.Items[0].TaskID != in.Tasks[0].ID || got.Items[0].ReasonCode != "PRACTICE_GAP" {
+	if len(got.Items) != 1 || got.Items[0].TaskID != in.Tasks[0].ID || got.Items[0].ReasonCode != reasonPracticeGap {
 		t.Fatalf("failed task should remain eligible when no alternative exists: %+v", got)
 	}
 }
 
 func TestBalancesTaskTypesWithinTopic(t *testing.T) {
+	t.Parallel()
+
 	in := base()
 	in.Minutes = 40
 	in.Tasks = []Task{
 		task(101, 1, "easy", "single_choice"),
 		task(102, 1, "easy", "single_choice"),
 		task(103, 1, "easy", "multiple_choice"),
-		task(104, 1, "easy", "programming"),
+		task(104, 1, "easy", taskTypeProgramming),
 	}
 	got := build(t, in)
 	if len(got.Items) != 3 || got.Items[0].TaskID != id(101) || got.Items[1].TaskID != id(103) || got.Items[2].TaskID != id(104) || got.TotalMinutes != 40 {
@@ -192,6 +217,8 @@ func TestBalancesTaskTypesWithinTopic(t *testing.T) {
 }
 
 func TestDiversityDeterminismAndDuplicateCap(t *testing.T) {
+	t.Parallel()
+
 	in := base()
 	in.TopicIDs = append(in.TopicIDs, id(2))
 	in.Topics = append(in.Topics, Topic{ID: id(2)})
@@ -206,7 +233,7 @@ func TestDiversityDeterminismAndDuplicateCap(t *testing.T) {
 	if counts[id(1)] != 2 || counts[id(2)] != 2 || want.TotalMinutes != 40 {
 		t.Fatalf("unbalanced or over budget: %+v", want)
 	}
-	rng := rand.New(rand.NewSource(42))
+	rng := rand.New(rand.NewSource(42)) //nolint:gosec // детерминированная перестановка тестовых данных
 	for i := 0; i < 30; i++ {
 		in.Evidence = append(in.Evidence, in.Evidence[0])
 		rng.Shuffle(len(in.Tasks), func(a, b int) { in.Tasks[a], in.Tasks[b] = in.Tasks[b], in.Tasks[a] })
@@ -219,6 +246,8 @@ func TestDiversityDeterminismAndDuplicateCap(t *testing.T) {
 }
 
 func TestWarningsAndItemCap(t *testing.T) {
+	t.Parallel()
+
 	in := base()
 	in.Tasks = nil
 	in.InputTruncated = true
@@ -226,7 +255,7 @@ func TestWarningsAndItemCap(t *testing.T) {
 	if !reflect.DeepEqual(got.Warnings, []string{"PARTIAL_DATA", "NO_ELIGIBLE_TASKS"}) || got.Items == nil {
 		t.Fatalf("unexpected empty plan: %+v", got)
 	}
-	in.Tasks = []Task{task(101, 1, "easy", "programming")}
+	in.Tasks = []Task{task(101, 1, "easy", taskTypeProgramming)}
 	in.Minutes = 10
 	got = build(t, in)
 	if !reflect.DeepEqual(got.Warnings, []string{"PARTIAL_DATA", "BUDGET_TOO_SMALL"}) {
@@ -244,6 +273,8 @@ func TestWarningsAndItemCap(t *testing.T) {
 }
 
 func TestValidation(t *testing.T) {
+	t.Parallel()
+
 	cases := map[string]func(*Request){
 		"no topics selected":   func(r *Request) { r.TopicIDs = nil },
 		"duplicate selected":   func(r *Request) { r.TopicIDs = append(r.TopicIDs, r.TopicIDs[0]) },
@@ -274,13 +305,15 @@ func TestValidation(t *testing.T) {
 		"invalid type":       func(r *Request) { r.Tasks[0].TaskType = "essay" },
 		"invalid verdict":    func(r *Request) { r.Evidence = []Evidence{evidence(r.Tasks[0], "pending")} },
 		"missing time": func(r *Request) {
-			e := evidence(r.Tasks[0], "accepted")
+			e := evidence(r.Tasks[0], verdictAccepted)
 			e.OccurredAt = time.Time{}
 			r.Evidence = []Evidence{e}
 		},
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			in := base()
 			mutate(&in)
 			if _, err := Build(context.Background(), in); !errors.Is(err, ErrInvalidInput) {
@@ -291,6 +324,8 @@ func TestValidation(t *testing.T) {
 }
 
 func TestCancelledContext(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := Build(ctx, base()); !errors.Is(err, context.Canceled) {

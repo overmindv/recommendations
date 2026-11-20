@@ -67,6 +67,7 @@ func Validate(in Request) error {
 			}
 		}
 		colors[id] = 2
+
 		return true
 	}
 	for id := range topics {
@@ -82,7 +83,7 @@ func Validate(in Request) error {
 			return ErrInvalidInput
 		}
 		switch task.TaskType {
-		case "single_choice", "multiple_choice", "programming":
+		case "single_choice", "multiple_choice", taskTypeProgramming:
 		default:
 			return ErrInvalidInput
 		}
@@ -93,11 +94,12 @@ func Validate(in Request) error {
 			return ErrInvalidInput
 		}
 		switch e.Verdict {
-		case "accepted", "wrong_answer", "compilation_error", "runtime_error", "time_limit_exceeded", "memory_limit_exceeded", "output_limit_exceeded", "infrastructure_error", "checker_error", "cancelled":
+		case verdictAccepted, "wrong_answer", verdictCompilationError, "runtime_error", "time_limit_exceeded", "memory_limit_exceeded", "output_limit_exceeded", "infrastructure_error", "checker_error", "canceled":
 		default:
 			return ErrInvalidInput
 		}
 	}
+
 	return nil
 }
 
@@ -107,8 +109,9 @@ func difficulty(value string) int {
 		return 1
 	case "medium":
 		return 2
-	case "hard":
+	case difficultyHard:
 		return 3
 	}
+
 	return 0
 }

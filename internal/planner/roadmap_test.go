@@ -10,6 +10,8 @@ import (
 )
 
 func TestRoadmapBudgetsUniqueTasksAndLegacyFirstSession(t *testing.T) {
+	t.Parallel()
+
 	in := base()
 	in.SessionCount, in.Minutes = 3, 20
 	in.Tasks = nil
@@ -42,7 +44,7 @@ func TestRoadmapBudgetsUniqueTasksAndLegacyFirstSession(t *testing.T) {
 			t.Fatalf("plan became evidence: %+v", insight)
 		}
 	}
-	rng := rand.New(rand.NewSource(17))
+	rng := rand.New(rand.NewSource(17)) //nolint:gosec // детерминированная перестановка тестовых данных
 	for range 10 {
 		rng.Shuffle(len(in.Tasks), func(a, b int) { in.Tasks[a], in.Tasks[b] = in.Tasks[b], in.Tasks[a] })
 		slices.Reverse(in.Topics)
@@ -54,6 +56,8 @@ func TestRoadmapBudgetsUniqueTasksAndLegacyFirstSession(t *testing.T) {
 }
 
 func TestRoadmapNeverUnlocksFromPlannedPractice(t *testing.T) {
+	t.Parallel()
+
 	in := base()
 	in.TopicIDs = []string{id(3)}
 	in.SessionCount, in.Minutes = 8, 10
@@ -68,12 +72,14 @@ func TestRoadmapNeverUnlocksFromPlannedPractice(t *testing.T) {
 			t.Fatal("planned tasks unlocked dependent")
 		}
 	}
-	if !reflect.DeepEqual(got.TopicInsights[2].BlockedBy, []string{id(1), id(2)}) || got.TopicInsights[2].NextAction != "COMPLETE_PREREQUISITES" {
+	if !reflect.DeepEqual(got.TopicInsights[2].BlockedBy, []string{id(1), id(2)}) || got.TopicInsights[2].NextAction != actionCompletePrerequisites {
 		t.Fatalf("missing transitive blockers: %+v", got.TopicInsights)
 	}
 }
 
 func TestRoadmapActionableCatalogAndBudgetDiagnostics(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name, action string
 		tasks        []Task
@@ -82,15 +88,17 @@ func TestRoadmapActionableCatalogAndBudgetDiagnostics(t *testing.T) {
 	}{
 		{"no content", "ADD_CONTENT", nil, false, 0},
 		{"all accepted", "NO_NEW_TASKS", []Task{task(101, 1, "easy", "single_choice")}, true, 0},
-		{"too hard", "NEED_EASIER_TASKS", []Task{task(101, 1, "hard", "programming")}, false, 0},
-		{"time", "INCREASE_BUDGET", []Task{task(101, 1, "easy", "programming")}, false, 20},
+		{"too hard", "NEED_EASIER_TASKS", []Task{task(101, 1, difficultyHard, taskTypeProgramming)}, false, 0},
+		{"time", "INCREASE_BUDGET", []Task{task(101, 1, "easy", taskTypeProgramming)}, false, 20},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			in := base()
 			in.Tasks = tc.tasks
 			in.Minutes = 10
 			if tc.solved {
-				in.Evidence = []Evidence{evidence(in.Tasks[0], "accepted")}
+				in.Evidence = []Evidence{evidence(in.Tasks[0], verdictAccepted)}
 			}
 			insight := build(t, in).TopicInsights[0]
 			if insight.NextAction != tc.action || insight.MinimumMinutes != tc.minimum {
@@ -101,6 +109,8 @@ func TestRoadmapActionableCatalogAndBudgetDiagnostics(t *testing.T) {
 }
 
 func TestRoadmapCoverageAcrossShortSessionsAndRecoveryPriority(t *testing.T) {
+	t.Parallel()
+
 	in := base()
 	in.Minutes = 10
 	in.SessionCount = 2
@@ -115,6 +125,8 @@ func TestRoadmapCoverageAcrossShortSessionsAndRecoveryPriority(t *testing.T) {
 }
 
 func TestRoadmapSessionLimitsAndDefault(t *testing.T) {
+	t.Parallel()
+
 	for _, count := range []int{-1, 9} {
 		in := base()
 		in.SessionCount = count

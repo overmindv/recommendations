@@ -4,6 +4,23 @@ import (
 	"context"
 )
 
+const (
+	taskTypeProgramming         = "programming"
+	verdictAccepted             = "accepted"
+	verdictWrongAnswer          = "wrong_answer"
+	verdictCompilationError     = "compilation_error"
+	verdictRuntimeError         = "runtime_error"
+	verdictTimeLimitExceeded    = "time_limit_exceeded"
+	verdictMemoryLimitExceeded  = "memory_limit_exceeded"
+	verdictOutputLimitExceeded  = "output_limit_exceeded"
+	reasonStartTopic            = "START_TOPIC"
+	reasonNextChallenge         = "NEXT_CHALLENGE"
+	reasonPracticeGap           = "PRACTICE_GAP"
+	reasonPrerequisite          = "PREREQUISITE"
+	actionCompletePrerequisites = "COMPLETE_PREREQUISITES"
+	difficultyHard              = "hard"
+)
+
 type outcome struct{ accepted, failed bool }
 type candidate struct {
 	task     Task
@@ -38,9 +55,9 @@ func Build(ctx context.Context, in Request) (Plan, error) {
 		}
 		result := results[e.TaskID]
 		switch e.Verdict {
-		case "accepted":
+		case verdictAccepted:
 			result.accepted = true
-		case "wrong_answer", "compilation_error", "runtime_error", "time_limit_exceeded", "memory_limit_exceeded", "output_limit_exceeded":
+		case verdictWrongAnswer, verdictCompilationError, verdictRuntimeError, verdictTimeLimitExceeded, verdictMemoryLimitExceeded, verdictOutputLimitExceeded:
 			result.failed = true
 		}
 		results[e.TaskID] = result
@@ -71,6 +88,7 @@ func Build(ctx context.Context, in Request) (Plan, error) {
 				unlocked[id] = false
 			}
 		}
+
 		return unlocked[id]
 	}
 	eligible := make(map[string]bool)
@@ -88,6 +106,7 @@ func Build(ctx context.Context, in Request) (Plan, error) {
 		visited[id] = true
 		if isUnlocked(id) {
 			eligible[id] = true
+
 			return
 		}
 		blocked = true
@@ -113,21 +132,21 @@ func Build(ctx context.Context, in Request) (Plan, error) {
 		if d > level {
 			continue
 		}
-		reason := "START_TOPIC"
+		reason := reasonStartTopic
 		if accepted[task.TopicID] > 0 {
-			reason = "NEXT_CHALLENGE"
+			reason = reasonNextChallenge
 		}
 		if failed[task.TopicID] > 0 {
-			reason = "PRACTICE_GAP"
+			reason = reasonPracticeGap
 		}
 		if prerequisites[task.TopicID] {
-			reason = "PREREQUISITE"
+			reason = reasonPrerequisite
 		}
 		priority := 0
-		if reason == "PRACTICE_GAP" {
+		if reason == reasonPracticeGap {
 			priority = 1
 		}
-		if reason == "PREREQUISITE" {
+		if reason == reasonPrerequisite {
 			priority = 2
 		}
 		candidates = append(candidates, candidate{task: task, minutes: estimatedMinutes(task), reason: reason, failed: results[task.ID].failed, fit: level - d, priority: priority})
@@ -184,6 +203,7 @@ func Build(ctx context.Context, in Request) (Plan, error) {
 		plan.Warnings = append(plan.Warnings, "SHORT_HORIZON")
 	}
 	plan.TopicInsights = topicInsights(in, topics, results, accepted, failed, selectedCount)
+
 	return plan, nil
 }
 
@@ -206,5 +226,6 @@ func betterCandidate(a, b candidate, selectedCount map[string]int, selectedTypeC
 	if a.fit != b.fit {
 		return a.fit < b.fit
 	}
+
 	return a.task.ID < b.task.ID
 }
