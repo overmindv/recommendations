@@ -44,10 +44,13 @@ func testStore(t testing.TB) (*Postgres, string) {
 			}
 		}
 	})
+
 	return NewPostgres(pool), actor
 }
 
+//nolint:paralleltest // component test использует общую выделенную PostgreSQL
 func TestPostgresLearnerGoalLifecycle(t *testing.T) {
+
 	store, actor := testStore(t)
 	foreignStore, foreign := testStore(t)
 	ctx := t.Context()
@@ -64,28 +67,28 @@ func TestPostgresLearnerGoalLifecycle(t *testing.T) {
 	if err != nil || availability.Version != 1 || availability.Timezone != in.Timezone {
 		t.Fatal("availability was not stored", availability, err)
 	}
-	if _, err := foreignStore.SaveAvailability(ctx, foreign, Write{RequestID: testID(10)}, in); err != nil {
-		t.Fatal("request IDs should be scoped to owner", err)
+	if _, saveErr := foreignStore.SaveAvailability(ctx, foreign, Write{RequestID: testID(10)}, in); saveErr != nil {
+		t.Fatal("request IDs should be scoped to owner", saveErr)
 	}
 	goal := validGoal()
-	goal.Deadline = "2026-11-18"
+	goal.Deadline = testDeadline
 	created, err := store.Create(ctx, actor, testID(11), goal)
 	if err != nil || created.Version != 1 || created.UserID != actor || created.Deadline != goal.Deadline ||
-		created.Timezone != in.Timezone || len(created.SelfAssessments) != 2 || created.SelfAssessments[1].Level != "unknown" {
+		created.Timezone != in.Timezone || len(created.SelfAssessments) != 2 || created.SelfAssessments[1].Level != levelUnknown {
 		t.Fatal("invalid persisted goal", created, err)
 	}
-	if _, err := store.Get(ctx, foreign, created.ID); !errors.Is(err, ErrNotFound) {
-		t.Error("foreign read did not return not found", err)
+	if _, getErr := store.Get(ctx, foreign, created.ID); !errors.Is(getErr, ErrNotFound) {
+		t.Error("foreign read did not return not found", getErr)
 	}
-	if _, err := store.Update(ctx, foreign, created.ID, Write{testID(12), 1}, goal); !errors.Is(err, ErrNotFound) {
-		t.Error("foreign update did not return not found", err)
+	if _, updateErr := store.Update(ctx, foreign, created.ID, Write{testID(12), 1}, goal); !errors.Is(updateErr, ErrNotFound) {
+		t.Error("foreign update did not return not found", updateErr)
 	}
-	if err := store.Delete(ctx, foreign, created.ID, Write{testID(12), 1}); !errors.Is(err, ErrNotFound) {
-		t.Error("foreign delete did not return not found", err)
+	if deleteErr := store.Delete(ctx, foreign, created.ID, Write{testID(12), 1}); !errors.Is(deleteErr, ErrNotFound) {
+		t.Error("foreign delete did not return not found", deleteErr)
 	}
 	goal.WeeklyMinutes = 90
-	if _, err := store.Create(ctx, actor, testID(11), goal); !errors.Is(err, ErrRequestUsed) {
-		t.Error("request ID accepted a different payload", err)
+	if _, createErr := store.Create(ctx, actor, testID(11), goal); !errors.Is(createErr, ErrRequestUsed) {
+		t.Error("request ID accepted a different payload", createErr)
 	}
 	write := Write{testID(13), 1}
 	updated, err := store.Update(ctx, actor, created.ID, write, goal)
@@ -128,7 +131,9 @@ func TestPostgresLearnerGoalLifecycle(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // component test использует общую выделенную PostgreSQL
 func TestPostgresConcurrentAllocations(t *testing.T) {
+
 	store, actor := testStore(t)
 	ctx := t.Context()
 	if _, err := store.SaveAvailability(ctx, actor, Write{RequestID: testID(21)}, AvailabilityInput{110, "UTC"}); err != nil {
@@ -170,7 +175,9 @@ func TestPostgresConcurrentAllocations(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // component test использует общую выделенную PostgreSQL
 func TestPostgresConcurrentVersionsAndExpiry(t *testing.T) {
+
 	store, actor := testStore(t)
 	ctx := t.Context()
 	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)

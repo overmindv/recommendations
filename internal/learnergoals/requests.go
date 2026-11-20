@@ -33,22 +33,23 @@ func executeWrite[T any](ctx context.Context, store *Postgres, actor, requestID 
 	digest := sha256.Sum256(payload)
 	err = pgx.BeginTxFunc(ctx, store.pool, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(tx pgx.Tx) error {
 		// После ожидания блокировки запросы должны увидеть записи предыдущей транзакции.
-		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 198))", actor); err != nil {
-			return err
+		if _, lockErr := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 198))", actor); lockErr != nil {
+			return lockErr
 		}
 		now := store.now().UTC()
 		var savedHash, savedResponse []byte
-		err := tx.QueryRow(ctx, `
+		queryErr := tx.QueryRow(ctx, `
 			SELECT fingerprint, response FROM learner_goal_requests
 			WHERE user_id = $1 AND request_id = $2 AND expires_at > $3`, actor, requestID, now).Scan(&savedHash, &savedResponse)
-		if err == nil {
+		if queryErr == nil {
 			if !bytes.Equal(savedHash, digest[:]) {
 				return ErrRequestUsed
 			}
+
 			return json.Unmarshal(savedResponse, &result)
 		}
-		if !errors.Is(err, pgx.ErrNoRows) {
-			return err
+		if !errors.Is(queryErr, pgx.ErrNoRows) {
+			return queryErr
 		}
 		var count int
 		if err = tx.QueryRow(ctx, "SELECT count(*) FROM learner_goal_requests WHERE user_id = $1 AND expires_at > $2", actor, now).
@@ -62,9 +63,9 @@ func executeWrite[T any](ctx context.Context, store *Postgres, actor, requestID 
 		if err != nil {
 			return err
 		}
-		response, err := json.Marshal(result)
-		if err != nil {
-			return err
+		response, marshalErr := json.Marshal(result)
+		if marshalErr != nil {
+			return marshalErr
 		}
 		_, err = tx.Exec(ctx, `
 			INSERT INTO learner_goal_requests (user_id, request_id, fingerprint, response, expires_at)
@@ -72,11 +73,13 @@ func executeWrite[T any](ctx context.Context, store *Postgres, actor, requestID 
 			ON CONFLICT (user_id, request_id) DO UPDATE
 			SET fingerprint = EXCLUDED.fingerprint, response = EXCLUDED.response, expires_at = EXCLUDED.expires_at`,
 			actor, requestID, digest[:], response, now.Add(idempotencyTTL))
+
 		return err
 	})
 	if err != nil {
 		return zero, fmt.Errorf("write learner goal: %w", err)
 	}
+
 	return result, nil
 }
 
@@ -92,5 +95,6 @@ func (p *Postgres) PruneExpiredRequests(ctx context.Context, limit int) (int64, 
 		)
 		DELETE FROM learner_goal_requests r USING expired e
 		WHERE r.user_id = e.user_id AND r.request_id = e.request_id`, p.now().UTC(), limit)
+
 	return tag.RowsAffected(), err
 }

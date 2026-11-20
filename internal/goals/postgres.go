@@ -28,6 +28,7 @@ func (p *Postgres) Get(ctx context.Context, userID string) (Goal, error) {
 	if err := json.Unmarshal(raw, &goal.TopicIDs); err != nil {
 		return Goal{}, fmt.Errorf("decode practice goal: %w", err)
 	}
+
 	return goal, nil
 }
 
@@ -53,6 +54,7 @@ func (p *Postgres) Save(ctx context.Context, userID string, input Input) (Goal, 
 	if err := json.Unmarshal(raw, &goal.TopicIDs); err != nil {
 		return Goal{}, fmt.Errorf("decode saved practice goal: %w", err)
 	}
+
 	return goal, nil
 }
 
@@ -60,5 +62,6 @@ func (p *Postgres) Delete(ctx context.Context, userID string) error {
 	if _, err := p.pool.Exec(ctx, `DELETE FROM practice_goals WHERE user_id = $1`, userID); err != nil {
 		return fmt.Errorf("delete practice goal: %w", err)
 	}
+
 	return nil
 }

@@ -13,14 +13,16 @@ func recommendedLevel(accepted, failed int) int {
 	if failed > 0 && level > 1 {
 		level--
 	}
+
 	return level
 }
 
 func estimatedMinutes(task Task) int {
 	d := difficulty(task.Difficulty)
-	if task.TaskType == "programming" {
+	if task.TaskType == taskTypeProgramming {
 		return []int{0, 20, 35, 50}[d]
 	}
+
 	return []int{0, 10, 15, 20}[d]
 }
 
@@ -53,7 +55,7 @@ func topicInsights(in Request, topics map[string]Topic, results map[string]outco
 	insights := make([]TopicInsight, 0, len(ordered))
 	for _, id := range ordered {
 		level := recommendedLevel(accepted[id], failed[id])
-		insight := TopicInsight{TopicID: id, IsTarget: targets[id], AcceptedTasks: accepted[id], FailedTasks: failed[id], PlannedTasks: planned[id], RemainingToReadiness: max(0, ReadinessTasks-accepted[id]), RecommendedDifficulty: []string{"", "easy", "medium", "hard"}[level], BlockedBy: []string{}}
+		insight := TopicInsight{TopicID: id, IsTarget: targets[id], AcceptedTasks: accepted[id], FailedTasks: failed[id], PlannedTasks: planned[id], RemainingToReadiness: max(0, ReadinessTasks-accepted[id]), RecommendedDifficulty: []string{"", "easy", "medium", difficultyHard}[level], BlockedBy: []string{}}
 		ancestors := make(map[string]bool)
 		var collect func(string)
 		collect = func(current string) {
@@ -91,7 +93,7 @@ func topicInsights(in Request, topics map[string]Topic, results map[string]outco
 		}
 		switch {
 		case len(insight.BlockedBy) > 0:
-			insight.NextAction = "COMPLETE_PREREQUISITES"
+			insight.NextAction = actionCompletePrerequisites
 		case published == 0:
 			insight.NextAction = "ADD_CONTENT"
 		case unsolved == 0:
@@ -105,5 +107,6 @@ func topicInsights(in Request, topics map[string]Topic, results map[string]outco
 		}
 		insights = append(insights, insight)
 	}
+
 	return insights
 }

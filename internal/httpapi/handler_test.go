@@ -20,11 +20,14 @@ func request(body string) *http.Request {
 	r := httptest.NewRequest(http.MethodPost, "/v1/practice-plan", strings.NewReader(body))
 	r.Header.Set("Authorization", "Bearer "+token)
 	r.Header.Set("X-User-ID", actor)
-	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Content-Type", jsonContentType)
+
 	return r
 }
 
 func TestHTTPContract(t *testing.T) {
+	t.Parallel()
+
 	mux := http.NewServeMux()
 	Register(mux, token)
 	w := httptest.NewRecorder()
@@ -32,7 +35,7 @@ func TestHTTPContract(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("status %d: %s", w.Code, w.Body)
 	}
-	if w.Header().Get("Cache-Control") != "no-store" || w.Header().Get("Content-Type") != "application/json" {
+	if w.Header().Get("Cache-Control") != noStoreCache || w.Header().Get("Content-Type") != jsonContentType {
 		t.Fatalf("unexpected headers: %v", w.Header())
 	}
 	var got planner.Plan
@@ -63,6 +66,8 @@ func TestHTTPContract(t *testing.T) {
 }
 
 func TestAuthentication(t *testing.T) {
+	t.Parallel()
+
 	cases := map[string]func(*http.Request){
 		"missing token":   func(r *http.Request) { r.Header.Del("Authorization") },
 		"wrong token":     func(r *http.Request) { r.Header.Set("Authorization", "Bearer wrong") },
@@ -75,6 +80,8 @@ func TestAuthentication(t *testing.T) {
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			r := request("secret SQL password")
 			mutate(r)
 			w := httptest.NewRecorder()
@@ -89,6 +96,8 @@ func TestAuthentication(t *testing.T) {
 		})
 	}
 	t.Run("empty configured token", func(t *testing.T) {
+		t.Parallel()
+
 		w := httptest.NewRecorder()
 		NewHandler("").ServeHTTP(w, request(validBody))
 		if w.Code != 403 {
@@ -98,6 +107,8 @@ func TestAuthentication(t *testing.T) {
 }
 
 func TestStrictInputAndSafeErrors(t *testing.T) {
+	t.Parallel()
+
 	cases := map[string]struct {
 		body   string
 		status int
@@ -114,6 +125,8 @@ func TestStrictInputAndSafeErrors(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			w := httptest.NewRecorder()
 			NewHandler(token).ServeHTTP(w, request(tc.body))
 			if w.Code != tc.status {
@@ -123,7 +136,7 @@ func TestStrictInputAndSafeErrors(t *testing.T) {
 				t.Fatalf("unsafe error: %s", w.Body)
 			}
 			var got publicError
-			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || got.Code != "INVALID_ARGUMENT" {
+			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || got.Code != codeInvalidArgument {
 				t.Fatalf("unexpected error: %s", w.Body)
 			}
 		})
@@ -138,6 +151,8 @@ func TestStrictInputAndSafeErrors(t *testing.T) {
 }
 
 func TestConcurrentActorIsolation(t *testing.T) {
+	t.Parallel()
+
 	h := NewHandler(token)
 	var wg sync.WaitGroup
 	for i := 0; i < 40; i++ {
@@ -157,6 +172,7 @@ func TestConcurrentActorIsolation(t *testing.T) {
 			var plan planner.Plan
 			if err := json.NewDecoder(bytes.NewReader(w.Body.Bytes())).Decode(&plan); err != nil {
 				t.Error(err)
+
 				return
 			}
 			if w.Code != 200 || (len(plan.Items) == 0) != solved {

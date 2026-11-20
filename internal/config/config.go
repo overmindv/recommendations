@@ -37,5 +37,6 @@ func Load() (Config, error) {
 	if err != nil || number < 1 || number > 65535 {
 		return Config{}, errors.New("HTTP port must be between 1 and 65535")
 	}
+
 	return c, nil
 }

@@ -12,6 +12,8 @@ import (
 )
 
 // Компонентный тест запускается только на выделенной GOALS_TEST_DSN.
+//
+//nolint:paralleltest // component test использует общую выделенную PostgreSQL
 func TestPostgresGoalLifecycle(t *testing.T) {
 	dsn := os.Getenv("GOALS_TEST_DSN")
 	if dsn == "" {

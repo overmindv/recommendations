@@ -11,6 +11,8 @@ import (
 )
 
 func TestOutlineUsesOnlyCatalogIDsAndSharedCache(t *testing.T) {
+	t.Parallel()
+
 	in := OutlineRequest{Goal: "Junior AI", Topics: []planner.Topic{{ID: testID(1), Title: "Python"}}}
 	calls := 0
 	e := New(rankFunc(func(_ context.Context, b []byte) ([]int, error) {
@@ -18,14 +20,15 @@ func TestOutlineUsesOnlyCatalogIDsAndSharedCache(t *testing.T) {
 		if strings.Contains(string(b), testID(1)) {
 			t.Fatal("UUID leak")
 		}
+
 		return []int{1, 2, 5}, nil
 	}))
 	out, err := e.Outline(context.Background(), in, "user-a")
-	if err != nil || out.AIStatus != "GENERATED" || len(out.TopicIDs) != 1 || len(out.Materials) != 2 || out.Materials[0].ID != "python" {
+	if err != nil || out.AIStatus != aiStatusGenerated || len(out.TopicIDs) != 1 || len(out.Materials) != 2 || out.Materials[0].ID != materialPython {
 		t.Fatalf("bad outline: %+v %v", out, err)
 	}
 	out, err = e.Outline(context.Background(), in, "user-a")
-	if err != nil || out.AIStatus != "CACHED" || calls != 1 {
+	if err != nil || out.AIStatus != aiStatusCached || calls != 1 {
 		t.Fatal("cache miss")
 	}
 	_, _ = e.Outline(context.Background(), in, "user-b")
@@ -39,16 +42,18 @@ func TestOutlineUsesOnlyCatalogIDsAndSharedCache(t *testing.T) {
 	}
 }
 func TestOutlineRejectsInvalidSelections(t *testing.T) {
+	t.Parallel()
+
 	for _, ids := range [][]int{nil, {0}, {99}, {1, 1}, {1, 2, 3, 4, 5, 6, 7, 8, 9}} {
 		e := New(rankFunc(func(context.Context, []byte) ([]int, error) { return ids, nil }))
 		out, err := e.Outline(context.Background(), OutlineRequest{Goal: "ML"}, "a")
-		if err != nil || out.AIStatus != "UNAVAILABLE" || len(out.Materials) != 0 {
+		if err != nil || out.AIStatus != aiStatusUnavailable || len(out.Materials) != 0 {
 			t.Fatalf("accepted invalid IDs: %+v", out)
 		}
 	}
 	e := New(rankFunc(func(context.Context, []byte) ([]int, error) { return []int{}, nil }))
 	out, err := e.Outline(context.Background(), OutlineRequest{Goal: "unrelated"}, "a")
-	if err != nil || out.AIStatus != "NO_MATCH" {
+	if err != nil || out.AIStatus != aiStatusNoMatch {
 		t.Fatal(out, err)
 	}
 	for _, goal := range []string{"", strings.Repeat("я", 1001)} {
@@ -60,7 +65,9 @@ func TestOutlineRejectsInvalidSelections(t *testing.T) {
 
 // TestLiveOutline запускается вручную после настройки бесплатных аккаунтов; ключи не печатает.
 func TestLiveOutline(t *testing.T) {
-	if os.Getenv("AI_LIVE_TEST") != "true" {
+	t.Parallel()
+
+	if os.Getenv("AI_LIVE_TEST") != enabledValue {
 		t.Skip("manual free API smoke")
 	}
 	e, err := FromEnv()
@@ -69,7 +76,7 @@ func TestLiveOutline(t *testing.T) {
 	}
 	in := OutlineRequest{Goal: "Подготовь меня к собеседованию на Junior AI-инженера", Topics: []planner.Topic{{ID: testID(1), Title: "Python"}, {ID: testID(2), Title: "Машинное обучение"}, {ID: testID(3), Title: "NLP"}}}
 	out, err := e.Outline(context.Background(), in, "manual-smoke")
-	if err != nil || out.AIStatus != "GENERATED" || len(out.Materials) == 0 {
+	if err != nil || out.AIStatus != aiStatusGenerated || len(out.Materials) == 0 {
 		t.Fatalf("live outline status=%s error=%v", out.AIStatus, err)
 	}
 	safe, _ := json.Marshal(struct {
@@ -81,27 +88,30 @@ func TestLiveOutline(t *testing.T) {
 }
 
 func TestOutlineSkipsCompletedMaterialsAndInvalidatesCache(t *testing.T) {
+	t.Parallel()
+
 	calls := 0
 	e := New(rankFunc(func(_ context.Context, b []byte) ([]int, error) {
 		calls++
 		if strings.Contains(string(b), `"completed":true`) {
 			return []int{2}, nil
 		}
+
 		return []int{1}, nil
 	}))
 	in := OutlineRequest{Goal: "Python NumPy"}
 	first, err := e.Outline(context.Background(), in, "a")
-	if err != nil || first.Materials[0].ID != "python" {
+	if err != nil || first.Materials[0].ID != materialPython {
 		t.Fatal(first, err)
 	}
-	in.CompletedMaterialIDs = []string{"python"}
+	in.CompletedMaterialIDs = []string{materialPython}
 	next, err := e.Outline(context.Background(), in, "a")
 	if err != nil || next.Materials[0].ID != "numpy" || calls != 2 {
 		t.Fatal(next, err)
 	}
 	bad := New(rankFunc(func(context.Context, []byte) ([]int, error) { return []int{1}, nil }))
 	out, err := bad.Outline(context.Background(), in, "a")
-	if err != nil || out.AIStatus != "UNAVAILABLE" {
+	if err != nil || out.AIStatus != aiStatusUnavailable {
 		t.Fatal("completed recommendation accepted")
 	}
 }

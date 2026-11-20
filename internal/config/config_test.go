@@ -13,7 +13,9 @@ func cleanEnv(t *testing.T) {
 	t.Setenv("RECOMMENDATIONS_SERVICE_TOKEN", strings.Repeat("s", 32))
 }
 
+//nolint:paralleltest // t.Setenv изменяет process-wide environment
 func TestAddressPrecedence(t *testing.T) {
+
 	cleanEnv(t)
 	check := func(want string) {
 		t.Helper()
@@ -31,9 +33,12 @@ func TestAddressPrecedence(t *testing.T) {
 	check("127.0.0.1:8090")
 }
 
+//nolint:paralleltest // t.Setenv изменяет process-wide environment и subtests выполняются последовательно
 func TestInvalidConfig(t *testing.T) {
+
 	for _, value := range []string{"", "short", strings.Repeat("s", 4097), strings.Repeat("s", 32) + "\n"} {
 		t.Run("token", func(t *testing.T) {
+
 			cleanEnv(t)
 			t.Setenv("RECOMMENDATIONS_SERVICE_TOKEN", value)
 			if _, err := Load(); err == nil {
@@ -43,6 +48,7 @@ func TestInvalidConfig(t *testing.T) {
 	}
 	for _, value := range []string{"0", "-1", "65536", "bad", "8080/path"} {
 		t.Run("port_"+value, func(t *testing.T) {
+
 			cleanEnv(t)
 			t.Setenv("PORT", value)
 			if _, err := Load(); err == nil {

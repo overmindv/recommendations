@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+const testDeadline = "2026-11-18"
+
 func testID(n int) string { return fmt.Sprintf("00000000-0000-4000-8000-%012d", n) }
 
 func validGoal() Input {
@@ -22,13 +24,15 @@ func validGoal() Input {
 }
 
 func TestNormalizeLearnerGoal(t *testing.T) {
+	t.Parallel()
+
 	in := validGoal()
 	in.Title = "  Графы  "
 	got, err := normalize(in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Title != "Графы" || len(got.SelfAssessments) != 2 || got.SelfAssessments[1] != (SelfAssessment{testID(2), "unknown"}) {
+	if got.Title != "Графы" || len(got.SelfAssessments) != 2 || got.SelfAssessments[1] != (SelfAssessment{testID(2), levelUnknown}) {
 		t.Error("normalization did not preserve the explicit unknown assessment")
 	}
 	for name, mutate := range map[string]func(*Input){
@@ -49,6 +53,8 @@ func TestNormalizeLearnerGoal(t *testing.T) {
 		"duplicate level":  func(in *Input) { in.SelfAssessments = append(in.SelfAssessments, in.SelfAssessments[0]) },
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			in := validGoal()
 			mutate(&in)
 			if _, err := normalize(in); !errors.Is(err, ErrInvalid) {
@@ -59,8 +65,10 @@ func TestNormalizeLearnerGoal(t *testing.T) {
 }
 
 func TestDeadlineUsesLearnerCalendar(t *testing.T) {
+	t.Parallel()
+
 	in := validGoal()
-	in.Deadline = "2026-11-18"
+	in.Deadline = testDeadline
 	now := time.Date(2026, 11, 19, 2, 0, 0, 0, time.UTC)
 	if err := checkDeadline(in, Availability{AvailabilityInput: AvailabilityInput{Timezone: "America/Los_Angeles"}}, now); err != nil {
 		t.Error("same local day was rejected", err)

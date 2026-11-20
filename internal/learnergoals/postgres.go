@@ -42,6 +42,7 @@ func scanAvailability(row scanner) (Availability, error) {
 	if errors.Is(err, pgx.ErrNoRows) {
 		err = ErrNotFound
 	}
+
 	return result, err
 }
 
@@ -63,6 +64,7 @@ func scanGoal(row scanner) (Goal, error) {
 	if err := json.Unmarshal(raw, &goal.Preferences); err != nil {
 		return Goal{}, fmt.Errorf("decode learner goal preferences: %w", err)
 	}
+
 	return goal, nil
 }
 
@@ -70,6 +72,7 @@ func (p *Postgres) GetAvailability(ctx context.Context, actor string) (Availabil
 	if !planner.ValidID(actor) {
 		return Availability{}, ErrInvalid
 	}
+
 	return readAvailability(ctx, p.pool, actor)
 }
 
@@ -85,6 +88,7 @@ func (p *Postgres) List(ctx context.Context, actor string) ([]Goal, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list learner goals: %w", err)
 	}
+
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Goal, error) { return scanGoal(row) })
 }
 
@@ -92,6 +96,7 @@ func (p *Postgres) Get(ctx context.Context, actor, id string) (Goal, error) {
 	if !planner.ValidID(actor) || !planner.ValidID(id) {
 		return Goal{}, ErrInvalid
 	}
+
 	return readGoal(ctx, p.pool, actor, id)
 }
 
@@ -104,6 +109,7 @@ func (p *Postgres) SaveAvailability(ctx context.Context, actor string, write Wri
 		return Availability{}, ErrInvalid
 	}
 	cmd := command{Operation: "availability", Version: write.ExpectedVersion, Body: in}
+
 	return executeWrite(ctx, p, actor, write.RequestID, cmd, func(tx pgx.Tx, _ time.Time) (Availability, error) {
 		existing, err := readAvailability(ctx, tx, actor)
 		switch {
@@ -123,6 +129,7 @@ func (p *Postgres) SaveAvailability(ctx context.Context, actor string, write Wri
 		if allocated > in.WeeklyMinutes {
 			return Availability{}, ErrBudget
 		}
+
 		return scanAvailability(tx.QueryRow(ctx, `
 			UPDATE learner_availability SET weekly_minutes = $2, timezone = $3, version = version + 1,
 			                              updated_at = statement_timestamp()
@@ -137,6 +144,7 @@ func (p *Postgres) Create(ctx context.Context, actor, requestID string, in Input
 		return Goal{}, err
 	}
 	cmd := command{Operation: "create", Body: normalized}
+
 	return executeWrite(ctx, p, actor, requestID, cmd, func(tx pgx.Tx, now time.Time) (Goal, error) {
 		availability, err := readAvailability(ctx, tx, actor)
 		if err != nil {
@@ -168,6 +176,7 @@ func (p *Postgres) Create(ctx context.Context, actor, requestID string, in Input
 		if err != nil {
 			return Goal{}, err
 		}
+
 		return readGoal(ctx, tx, actor, id)
 	})
 }
@@ -178,6 +187,7 @@ func (p *Postgres) Update(ctx context.Context, actor, id string, write Write, in
 		return Goal{}, ErrInvalid
 	}
 	cmd := command{Operation: "update", GoalID: id, Version: write.ExpectedVersion, Body: normalized}
+
 	return executeWrite(ctx, p, actor, write.RequestID, cmd, func(tx pgx.Tx, now time.Time) (Goal, error) {
 		old, err := readGoal(ctx, tx, actor, id)
 		if err != nil {
@@ -217,6 +227,7 @@ func (p *Postgres) Update(ctx context.Context, actor, id string, write Write, in
 		if tag.RowsAffected() != 1 {
 			return Goal{}, ErrConflict
 		}
+
 		return readGoal(ctx, tx, actor, id)
 	})
 }
@@ -235,8 +246,10 @@ func (p *Postgres) Delete(ctx context.Context, actor, id string, write Write) er
 				err = ErrConflict
 			}
 		}
+
 		return struct{}{}, err
 	})
+
 	return err
 }
 
@@ -244,6 +257,7 @@ func allocations(ctx context.Context, tx pgx.Tx, actor string) (count, allocated
 	err = tx.QueryRow(ctx, `
 		SELECT count(*), COALESCE(sum(weekly_minutes) FILTER (WHERE active), 0)
 		FROM learner_goals WHERE user_id = $1`, actor).Scan(&count, &allocated)
+
 	return count, allocated, err
 }
 
@@ -251,5 +265,6 @@ func allocation(in Input) int {
 	if in.Active {
 		return in.WeeklyMinutes
 	}
+
 	return 0
 }
