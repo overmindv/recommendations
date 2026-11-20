@@ -1,0 +1,24 @@
+name: Check release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest:
+        description: Contents of the published release.json from infra
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: release-candidate-e2e
+  cancel-in-progress: false
+
+jobs:
+  journeys:
+    uses: overmindv/tests/.github/workflows/release-e2e.yml@ed09a12291e7c45287d3b0ead7f05df5c308586e
+    with:
+      tests_ref: ed09a12291e7c45287d3b0ead7f05df5c308586e
+      manifest: ${{ inputs.manifest }}
