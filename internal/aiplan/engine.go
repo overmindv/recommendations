@@ -95,6 +95,7 @@ func compact(in planner.Request, pool planner.Plan) ([]byte, []planner.Item) {
 		}
 	}
 	data, _ := json.Marshal(c)
+
 	return data, items
 }
 func short(s string, n int) string {
@@ -102,6 +103,7 @@ func short(s string, n int) string {
 	if len(r) > n {
 		return string(r[:n])
 	}
+
 	return s
 }
 
@@ -115,7 +117,7 @@ func (e *Engine) Build(ctx context.Context, in planner.Request, actor string) (p
 	if in.Goal == "" {
 		return base, nil
 	}
-	base.AIStatus = "UNAVAILABLE"
+	base.AIStatus = aiStatusUnavailable
 	if len(e.providers) == 0 {
 		return base, nil
 	}
@@ -129,6 +131,7 @@ func (e *Engine) Build(ctx context.Context, in planner.Request, actor string) (p
 	data, items := compact(in, pool)
 	if len(items) == 0 {
 		base.AIStatus = "NO_CANDIDATES"
+
 		return base, nil
 	}
 	// Полный snapshot в hash, но наружу уходят только агрегаты и публичные карточки.
@@ -186,6 +189,7 @@ func (e *Engine) Build(ctx context.Context, in planner.Request, actor string) (p
 	for i := range base.TopicInsights {
 		base.TopicInsights[i].PlannedTasks = counts[base.TopicInsights[i].TopicID]
 	}
+
 	return base, nil
 }
 
@@ -208,29 +212,33 @@ func (e *Engine) cachedOrder(ctx context.Context, key [32]byte, actor string, da
 	}
 	if v, ok := e.cache[key]; ok {
 		e.mu.Unlock()
-		return v.order, "CACHED"
+
+		return v.order, aiStatusCached
 	}
 	if f, ok := e.running[key]; ok {
 		e.mu.Unlock()
 		select {
 		case <-ctx.Done():
-			return nil, "UNAVAILABLE"
+			return nil, aiStatusUnavailable
 		case <-f.done:
 			if f.ok {
-				return f.order, "CACHED"
+				return f.order, aiStatusCached
 			}
-			return nil, "UNAVAILABLE"
+
+			return nil, aiStatusUnavailable
 		}
 	}
 	q := e.users[actor]
 	if q.count >= 10 || (q.count == 0 && len(e.users) >= 10000) {
 		e.mu.Unlock()
-		return nil, "LIMIT_REACHED"
+
+		return nil, aiStatusLimitReached
 	}
 	select {
 	case e.slots <- struct{}{}:
 	default:
 		e.mu.Unlock()
+
 		return nil, "BUSY"
 	}
 	if q.count == 0 {
@@ -252,6 +260,7 @@ func (e *Engine) cachedOrder(ctx context.Context, key [32]byte, actor string, da
 			if len(e.cache) >= 1000 {
 				for k := range e.cache {
 					delete(e.cache, k)
+
 					break
 				}
 			}
@@ -259,13 +268,15 @@ func (e *Engine) cachedOrder(ctx context.Context, key [32]byte, actor string, da
 			f.order = order
 			f.ok = true
 			e.mu.Unlock()
-			return order, "GENERATED"
+
+			return order, aiStatusGenerated
 		}
 		if err == ErrRefused {
-			return nil, "REFUSED"
+			return nil, aiStatusRefused
 		}
 	}
-	return nil, "UNAVAILABLE"
+
+	return nil, aiStatusUnavailable
 }
 func validOrder(order []int, n int) bool {
 	if len(order) != n {
@@ -278,6 +289,7 @@ func validOrder(order []int, n int) bool {
 			return false
 		}
 	}
+
 	return true
 }
 

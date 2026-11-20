@@ -27,10 +27,11 @@ type HTTPProvider struct {
 
 func NewHTTPProvider(name, model, key string) *HTTPProvider {
 	endpoint := map[string]string{
-		"gemini":     "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-		"groq":       "https://api.groq.com/openai/v1/chat/completions",
-		"openrouter": "https://openrouter.ai/api/v1/chat/completions",
+		"gemini":           "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+		"groq":             "https://api.groq.com/openai/v1/chat/completions",
+		providerOpenRouter: "https://openrouter.ai/api/v1/chat/completions",
 	}[name]
+
 	return &HTTPProvider{Name: name, Model: model, Key: key, URL: endpoint, client: &http.Client{Timeout: 8 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 func (p *HTTPProvider) Rank(ctx context.Context, input []byte) ([]int, error) {
@@ -44,13 +45,14 @@ func (p *HTTPProvider) Rank(ctx context.Context, input []byte) ([]int, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	if p.Name == "openrouter" {
+	if p.Name == providerOpenRouter {
 		if !strings.HasSuffix(p.Model, ":free") {
 			return nil, errUnavailable
 		}
 		if time.Since(p.priceChecked) > 10*time.Minute {
 			if !p.checkFree(ctx) {
 				p.until = time.Now().Add(time.Minute)
+
 				return nil, errUnavailable
 			}
 			p.priceChecked = time.Now()
@@ -64,7 +66,7 @@ func (p *HTTPProvider) Rank(ctx context.Context, input []byte) ([]int, error) {
 			{"role": "user", "content": string(input)},
 		},
 	}
-	if p.Name == "openrouter" {
+	if p.Name == providerOpenRouter {
 		payload["provider"] = map[string]any{"max_price": map[string]int{"prompt": 0, "completion": 0}, "allow_fallbacks": false}
 		payload["reasoning"] = map[string]bool{"enabled": false}
 	}
@@ -78,6 +80,7 @@ func (p *HTTPProvider) Rank(ctx context.Context, input []byte) ([]int, error) {
 	res, err := p.client.Do(req)
 	if err != nil {
 		p.until = time.Now().Add(15 * time.Second)
+
 		return nil, errUnavailable
 	}
 	defer func() { _ = res.Body.Close() }()
@@ -90,6 +93,7 @@ func (p *HTTPProvider) Rank(ctx context.Context, input []byte) ([]int, error) {
 		default:
 			p.until = time.Now().Add(time.Minute)
 		}
+
 		return nil, errUnavailable
 	}
 	var result struct {
@@ -123,6 +127,7 @@ func (p *HTTPProvider) Rank(ctx context.Context, input []byte) ([]int, error) {
 	if decoder.Decode(&extra) != io.EOF {
 		return nil, errUnavailable
 	}
+
 	return ranked.Order, nil
 }
 func retryDelay(value string) time.Duration {
@@ -140,6 +145,7 @@ func decodeLimited(r io.Reader, out any, limit int64) error {
 	if err != nil || int64(len(data)) > limit {
 		return errUnavailable
 	}
+
 	return json.Unmarshal(data, out)
 }
 func (p *HTTPProvider) checkFree(ctx context.Context) bool {
@@ -178,8 +184,10 @@ func (p *HTTPProvider) checkFree(ctx context.Context) bool {
 					return false
 				}
 			}
+
 			return true
 		}
 	}
+
 	return false
 }

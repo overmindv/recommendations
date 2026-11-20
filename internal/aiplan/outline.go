@@ -31,7 +31,7 @@ type Outline struct {
 
 // Редакционный каталог: модель выбирает ID, ссылки никогда не генерирует.
 var library = []Material{
-	{"python", "Python: основы языка", "https://docs.python.org/3/tutorial/", "Изучите списки, словари и функции; напишите функцию подсчёта частот слов и объясните её сложность.", 25},
+	{materialPython, "Python: основы языка", "https://docs.python.org/3/tutorial/", "Изучите списки, словари и функции; напишите функцию подсчёта частот слов и объясните её сложность.", 25},
 	{"numpy", "NumPy: массивы и векторизация", "https://numpy.org/doc/stable/user/absolute_beginners.html", "Создайте массив, выполните broadcasting и объясните отличие от цикла Python.", 25},
 	{"pandas", "pandas: подготовка данных", "https://pandas.pydata.org/docs/getting_started/intro_tutorials/", "Загрузите небольшой CSV, найдите пропуски и разделите признаки и целевую переменную.", 30},
 	{"ml", "Machine Learning: регрессия и классификация", "https://scikit-learn.org/stable/getting_started.html", "Обучите baseline-модель с train/test split и объясните, почему нельзя оценивать её на обучающей выборке.", 40},
@@ -47,7 +47,7 @@ var library = []Material{
 
 // Outline выбирает учебные темы и материалы, сохраняя общие квоты с практикой.
 func (e *Engine) Outline(ctx context.Context, in OutlineRequest, actor string) (Outline, error) {
-	out := Outline{AIStatus: "UNAVAILABLE", TopicIDs: []string{}, Materials: []Material{}}
+	out := Outline{AIStatus: aiStatusUnavailable, TopicIDs: []string{}, Materials: []Material{}}
 	in.Goal = strings.TrimSpace(in.Goal)
 	if in.Goal == "" || !utf8.ValidString(in.Goal) || utf8.RuneCountInString(in.Goal) > 1000 || len(in.Topics) > 200 {
 		return out, planner.ErrInvalidInput
@@ -104,6 +104,7 @@ func (e *Engine) Outline(ctx context.Context, in OutlineRequest, actor string) (
 				materials++
 			}
 		}
+
 		return topics <= 5 && materials <= 8
 	}
 	order, status := e.cachedOrder(ctx, key, actor, data, validate)
@@ -115,8 +116,9 @@ func (e *Engine) Outline(ctx context.Context, in OutlineRequest, actor string) (
 			out.Materials = append(out.Materials, library[id-len(in.Topics)-1])
 		}
 	}
-	if (status == "GENERATED" || status == "CACHED") && len(order) == 0 {
-		out.AIStatus = "NO_MATCH"
+	if (status == aiStatusGenerated || status == aiStatusCached) && len(order) == 0 {
+		out.AIStatus = aiStatusNoMatch
 	}
+
 	return out, nil
 }
