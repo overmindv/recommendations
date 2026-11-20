@@ -6,6 +6,8 @@ import (
 )
 
 func TestValidateGoal(t *testing.T) {
+	t.Parallel()
+
 	valid := Input{TopicIDs: []string{"00000000-0000-0000-0000-000000000001"}, Minutes: 60}
 	if err := Validate(valid); err != nil {
 		t.Fatal(err)
@@ -20,6 +22,8 @@ func TestValidateGoal(t *testing.T) {
 		"too many sessions": {TopicIDs: valid.TopicIDs, Minutes: 60, SessionCount: 9},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			if err := Validate(input); !errors.Is(err, ErrInvalid) {
 				t.Fatalf("expected invalid goal, got %v", err)
 			}

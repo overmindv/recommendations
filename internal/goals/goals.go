@@ -45,5 +45,6 @@ func Validate(input Input) error {
 		}
 		seen[id] = true
 	}
+
 	return nil
 }
