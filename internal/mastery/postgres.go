@@ -106,35 +106,34 @@ func (p *Postgres) Refresh(ctx context.Context, actor, goal string, version int6
 
 const evidenceSQL = `
 	WITH recent AS MATERIALIZED (
-	    SELECT submission_id,graded_at
+	    SELECT task_id,task_version_id,submission_id,event_id,correction_version,graded_at,verdict,topic_ids,topic_weights
 	    FROM learning_task_outcomes
 	    WHERE learner_id=$1 AND evidence_kind='independent' AND graded_at <= $2
 	    ORDER BY graded_at DESC, submission_id LIMIT $3
 	)
 	SELECT r.task_id::text,r.task_version_id::text,r.submission_id::text,r.event_id::text,r.correction_version,
-	       r.graded_at,r.verdict,r.topic_ids,r.topic_weights,r.submission_id = first.submission_id
-	FROM recent
-	JOIN LATERAL (
-	    SELECT o.*
-	    FROM learning_task_outcomes AS o
-	    WHERE o.submission_id=recent.submission_id
-	    LIMIT 1
-	) AS r ON true
-	JOIN LATERAL (
-	    SELECT o.submission_id
-	    FROM learning_task_outcomes AS o
-	    WHERE learner_id=$1 AND task_id=r.task_id AND evidence_kind='independent' AND graded_at <= $2
-	    ORDER BY graded_at,submission_id LIMIT 1
-	) AS first ON true
-	ORDER BY recent.graded_at DESC,recent.submission_id`
+	       r.graded_at,r.verdict,r.topic_ids,r.topic_weights,
+	       NOT EXISTS (
+	           SELECT 1 FROM learning_task_outcomes o
+	           WHERE o.learner_id=$1 AND o.task_id=r.task_id AND o.evidence_kind='independent'
+	               AND (o.graded_at,o.submission_id)<(r.graded_at,r.submission_id)
+	       )
+	FROM recent r
+	ORDER BY r.graded_at DESC,r.submission_id`
 
 func loadEvidence(ctx context.Context, tx pgx.Tx, actor string, until time.Time) ([]evidence, bool, error) {
+	return loadEvidenceInto(ctx, tx, actor, until, nil)
+}
+
+func loadEvidenceInto(ctx context.Context, tx pgx.Tx, actor string, until time.Time, result []evidence) ([]evidence, bool, error) {
 	rows, err := tx.Query(ctx, evidenceSQL, actor, until, maxEvidence+1)
 	if err != nil {
 		return nil, false, err
 	}
 	defer rows.Close()
-	result := make([]evidence, 0, 16)
+	if result == nil {
+		result = make([]evidence, 0, 16)
+	}
 	var count int
 	for rows.Next() {
 		count++
@@ -156,21 +155,32 @@ func loadEvidence(ctx context.Context, tx pgx.Tx, actor string, until time.Time)
 }
 
 func saveSnapshot(ctx context.Context, tx pgx.Tx, snapshot Snapshot, used []evidence) error {
-	topics, err := json.Marshal(snapshot.Topics)
+	args, err := snapshotArgs(snapshot, used)
 	if err != nil {
 		return err
+	}
+	_, err = tx.Exec(ctx, saveSnapshotSQL, args...)
+
+	return err
+}
+
+func snapshotArgs(snapshot Snapshot, used []evidence) ([]any, error) {
+	topics, err := json.Marshal(snapshot.Topics)
+	if err != nil {
+		return nil, err
 	}
 	raw, err := json.Marshal(used)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	_, err = tx.Exec(ctx, `
+
+	return []any{snapshot.GoalID, snapshot.GoalVersion, snapshot.Policy.Revision, snapshot.ComputedAt, topics, raw, snapshot.Truncated}, nil
+}
+
+const saveSnapshotSQL = `
 		INSERT INTO mastery_baselines (goal_id,goal_version,policy_revision,computed_at,topics,evidence,truncated)
 		VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7)
 		ON CONFLICT (goal_id) DO UPDATE SET
 		    goal_version=EXCLUDED.goal_version, policy_revision=EXCLUDED.policy_revision,
-		    computed_at=EXCLUDED.computed_at, topics=EXCLUDED.topics, evidence=EXCLUDED.evidence, truncated=EXCLUDED.truncated`,
-		snapshot.GoalID, snapshot.GoalVersion, snapshot.Policy.Revision, snapshot.ComputedAt, topics, raw, snapshot.Truncated)
-
-	return err
-}
+		    computed_at=EXCLUDED.computed_at, topics=EXCLUDED.topics, evidence=EXCLUDED.evidence,
+		    truncated=EXCLUDED.truncated, evidence_refs=NULL`

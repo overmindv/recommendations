@@ -18,15 +18,27 @@ const (
 	failedCheck        = "check_failed"
 )
 
+type progressAction uint8
+
+const (
+	startActivity progressAction = iota
+	completeActivity
+	assessActivity
+)
+
+func (p *Postgres) StartActivity(ctx context.Context, actor, goal string, version int64, ordinal int) (View, error) {
+	return p.updateProgress(ctx, actor, goal, version, ordinal, startActivity)
+}
+
 func (p *Postgres) CompleteActivity(ctx context.Context, actor, goal string, version int64, ordinal int) (View, error) {
-	return p.updateProgress(ctx, actor, goal, version, ordinal, false)
+	return p.updateProgress(ctx, actor, goal, version, ordinal, completeActivity)
 }
 
 func (p *Postgres) Assess(ctx context.Context, actor, goal string, version int64, ordinal int) (View, error) {
-	return p.updateProgress(ctx, actor, goal, version, ordinal, true)
+	return p.updateProgress(ctx, actor, goal, version, ordinal, assessActivity)
 }
 
-func (p *Postgres) updateProgress(ctx context.Context, actor, goal string, version int64, ordinal int, assessment bool) (View, error) {
+func (p *Postgres) updateProgress(ctx context.Context, actor, goal string, version int64, ordinal int, action progressAction) (View, error) {
 	if !planner.ValidID(actor) || !planner.ValidID(goal) || version < 1 || ordinal < 1 || ordinal > planner.MaxLearningItems {
 		return View{}, ErrInvalid
 	}
@@ -53,23 +65,35 @@ func (p *Postgres) updateProgress(ctx context.Context, actor, goal string, versi
 		if item == nil {
 			return ErrNotFound
 		}
-		if assessment != (item.Stage == planner.StudyCheck) {
+		if item.Superseded {
 			return ErrStepBlocked
 		}
-		if (assessment && item.Assessment != nil) || (!assessment && item.ActivityDone != nil) {
+		check := item.Stage == planner.StudyCheck
+		if (action == assessActivity && !check) || (action == completeActivity && check) {
+			return ErrStepBlocked
+		}
+		if (action == assessActivity && item.Assessment != nil) || (action == completeActivity && item.ActivityDone != nil) ||
+			(action == startActivity && (item.ActivityStarted != nil || item.Assessment != nil)) {
 			return nil
 		}
 		if result.NextStep == nil || *result.NextStep != ordinal {
 			return ErrStepBlocked
 		}
-		if assessment {
+		switch action {
+		case assessActivity:
 			if assessmentErr := recordAssessment(ctx, tx, actor, result, *item); assessmentErr != nil {
 				return assessmentErr
 			}
-		} else if _, activityErr := tx.Exec(ctx, `
-			INSERT INTO study_plan_activity (goal_id,plan_version,ordinal)
-			VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, goal, version, ordinal); activityErr != nil {
-			return activityErr
+		case startActivity, completeActivity:
+			if _, activityErr := tx.Exec(ctx, `
+				INSERT INTO study_plan_activity AS a (goal_id,plan_version,ordinal,started_at,completed_at)
+				VALUES ($1,$2,$3,statement_timestamp(),CASE WHEN $4::boolean THEN statement_timestamp() END)
+				ON CONFLICT (goal_id,plan_version,ordinal) DO UPDATE SET
+				    started_at=COALESCE(a.started_at,a.completed_at,EXCLUDED.started_at),
+				    completed_at=COALESCE(a.completed_at,CASE WHEN EXCLUDED.completed_at IS NOT NULL
+				        THEN GREATEST(a.started_at,EXCLUDED.completed_at) END)`, goal, version, ordinal, action == completeActivity); activityErr != nil {
+				return activityErr
+			}
 		}
 		result, err = readView(ctx, tx, goal, version, source)
 
@@ -82,22 +106,25 @@ func (p *Postgres) updateProgress(ctx context.Context, actor, goal string, versi
 	return result, nil
 }
 
+const eligibleCheck = `
+	FROM (
+	    SELECT submission_id,event_id,correction_version,verdict,graded_at,task_version_id,topic_ids
+	    FROM learning_task_outcomes
+	    WHERE learner_id=$1 AND task_id=$2 AND evidence_kind='independent'
+	      AND graded_at <= statement_timestamp()
+	    ORDER BY graded_at,submission_id LIMIT 1
+	) AS first
+	WHERE first.task_version_id=$3 AND $4=ANY(first.topic_ids) AND first.graded_at >= $5`
+
 func recordAssessment(ctx context.Context, tx pgx.Tx, actor string, view View, item Item) error {
 	tag, err := tx.Exec(ctx, `
 		INSERT INTO study_plan_assessments (goal_id,plan_version,ordinal,submission_id,event_id,correction_version,verdict,graded_at)
-		SELECT $1,$2,$3,first.submission_id,first.event_id,first.correction_version,first.verdict,first.graded_at
-		FROM (
-		    SELECT submission_id,event_id,correction_version,verdict,graded_at,task_version_id,topic_ids
-		    FROM learning_task_outcomes
-		    WHERE learner_id=$4 AND task_id=$5 AND evidence_kind='independent'
-		      AND graded_at <= statement_timestamp()
-		    ORDER BY graded_at,submission_id LIMIT 1
-		) AS first
-		WHERE first.task_version_id=$6 AND $7=ANY(first.topic_ids) AND first.graded_at >= $8
+		SELECT $6,$7,$8,first.submission_id,first.event_id,first.correction_version,first.verdict,first.graded_at
+		`+eligibleCheck+`
 		ON CONFLICT (goal_id,plan_version,ordinal) DO UPDATE SET
 		    submission_id=EXCLUDED.submission_id,event_id=EXCLUDED.event_id,
 		    correction_version=EXCLUDED.correction_version,verdict=EXCLUDED.verdict,graded_at=EXCLUDED.graded_at`,
-		view.GoalID, view.Version, item.Ordinal, actor, item.ID, item.RevisionID, item.TopicID, view.CreatedAt)
+		actor, item.ID, item.RevisionID, item.TopicID, item.evidenceSince, view.GoalID, view.Version, item.Ordinal)
 	if err != nil {
 		return err
 	}
@@ -118,7 +145,7 @@ func findItem(view View, ordinal int) *Item {
 	return nil
 }
 
-func describeProgress(ctx context.Context, tx pgx.Tx, actor string, view *View) error {
+func describeProgress(ctx context.Context, tx pgx.Tx, actor string, view *View, now time.Time) error {
 	if !view.Current || view.Stale {
 		view.BlockedReason = "stale_plan"
 
@@ -129,7 +156,7 @@ func describeProgress(ctx context.Context, tx pgx.Tx, actor string, view *View) 
 	goalChecksPassed := !slices.ContainsFunc(view.UnmetOutcomes, func(outcome planner.UnmetOutcome) bool {
 		return slices.Contains(view.TargetTopics, outcome.TopicID)
 	})
-	var next *Item
+	var pending []*Item
 	for _, week := range view.Weeks {
 		for i := range week.Items {
 			item := &week.Items[i]
@@ -142,14 +169,17 @@ func describeProgress(ctx context.Context, tx pgx.Tx, actor string, view *View) 
 			if item.Stage == planner.StudyCheck {
 				passed := item.Assessment != nil && item.Assessment.Verdict == acceptedVerdict
 				accepted[item.TopicID] = accepted[item.TopicID] || passed
+				if item.Superseded {
+					continue
+				}
 				if !passed && target {
 					goalChecksPassed = false
 				}
-				if !passed && next == nil {
-					next = item
+				if !passed {
+					pending = append(pending, item)
 				}
-			} else if item.ActivityDone == nil && next == nil {
-				next = item
+			} else if item.ActivityDone == nil {
+				pending = append(pending, item)
 			}
 		}
 	}
@@ -168,10 +198,12 @@ func describeProgress(ctx context.Context, tx pgx.Tx, actor string, view *View) 
 			topics = append(topics, id)
 		}
 	}
-	if next != nil {
-		for _, target := range next.RequiresCheck {
-			if accepted[target] {
-				topics = append(topics, target)
+	if len(pending) != 0 && len(pending[0].RequiresCheck) != 0 {
+		for _, item := range pending {
+			for _, target := range item.RequiresCheck {
+				if accepted[target] {
+					topics = append(topics, target)
+				}
 			}
 		}
 	}
@@ -179,7 +211,7 @@ func describeProgress(ctx context.Context, tx pgx.Tx, actor string, view *View) 
 	topics = slices.Compact(topics)
 	verified := make(map[string]int, len(topics))
 	if len(topics) != 0 {
-		evidence, err := mastery.ReadPlanningEvidence(ctx, tx, actor, topics, view.EvidencePolicy, time.Now().UTC())
+		evidence, err := mastery.ReadPlanningEvidence(ctx, tx, actor, topics, view.EvidencePolicy, now)
 		if err != nil {
 			return fmt.Errorf("read current study evidence: %w", err)
 		}
@@ -200,22 +232,59 @@ func describeProgress(ctx context.Context, tx pgx.Tx, actor string, view *View) 
 			view.GoalDemonstrated = false
 		}
 	}
-	if next == nil {
+	if len(pending) == 0 {
 		return nil
 	}
+	next := pending[0]
 	if next.Assessment != nil && next.Assessment.Verdict != acceptedVerdict {
 		view.BlockedReason = failedCheck
 
 		return nil
 	}
-	for _, target := range next.RequiresCheck {
-		if !accepted[target] || verified[target] < view.RankingPolicy.PrerequisiteMinBPS {
+	passes := func(topic string) bool {
+		return accepted[topic] && verified[topic] >= view.RankingPolicy.PrerequisiteMinBPS
+	}
+	if slices.ContainsFunc(next.RequiresCheck, func(topic string) bool { return !passes(topic) }) {
+		if repair := prerequisiteRepair(pending, passes); repair != nil {
+			view.NextStep = new(repair.Ordinal)
+		} else {
 			view.BlockedReason = "unverified_prerequisite"
-
-			return nil
 		}
+
+		return nil
 	}
 	view.NextStep = new(next.Ordinal)
+
+	return nil
+}
+
+func prerequisiteRepair(pending []*Item, passes func(string) bool) *Item {
+	needed := make(map[string]bool)
+	for _, topic := range pending[0].RequiresCheck {
+		needed[topic] = !passes(topic)
+	}
+	for {
+		expanded := false
+		for _, item := range pending[1:] {
+			if !needed[item.TopicID] {
+				continue
+			}
+			for _, topic := range item.RequiresCheck {
+				if !passes(topic) && !needed[topic] {
+					needed[topic], expanded = true, true
+				}
+			}
+		}
+		if !expanded {
+			break
+		}
+	}
+	for _, item := range pending[1:] {
+		if needed[item.TopicID] && item.Assessment == nil &&
+			!slices.ContainsFunc(item.RequiresCheck, func(topic string) bool { return !passes(topic) }) {
+			return item
+		}
+	}
 
 	return nil
 }
