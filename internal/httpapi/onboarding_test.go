@@ -48,7 +48,7 @@ func performOnboarding(t *testing.T, mux *http.ServeMux, r *http.Request, status
 	if w.Code != status || (contains != "" && !strings.Contains(body, contains)) {
 		t.Fatal(r.Method, r.URL.Path, "wanted", status, contains, "got", w.Code, body)
 	}
-	if w.Header().Get("Cache-Control") != "no-store" {
+	if w.Header().Get("Cache-Control") != noStoreCache {
 		t.Fatal("response can be cached", w.Header())
 	}
 

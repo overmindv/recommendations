@@ -111,7 +111,7 @@ func (c *TaskClient) Snapshot(ctx context.Context, watermark *int64, cursor stri
 		Resources []taskEnvelope `json:"resources"`
 		Cursor    string         `json:"next_cursor"`
 	}
-	if err := c.request(ctx, http.MethodGet, "snapshot", query, nil, &wire); err != nil {
+	if err := c.request(ctx, http.MethodGet, "snapshot", query, nil, "", &wire); err != nil {
 		return SnapshotPage{}, err
 	}
 	if wire.Watermark == nil || wire.Resources == nil || len(wire.Resources) > pageLimit {
@@ -141,7 +141,7 @@ func (c *TaskClient) Changes(ctx context.Context, watermark *int64, after int64)
 		More      bool           `json:"more"`
 		Changes   []taskEnvelope `json:"changes"`
 	}
-	if err := c.request(ctx, http.MethodGet, "changes", query, nil, &wire); err != nil {
+	if err := c.request(ctx, http.MethodGet, "changes", query, nil, "", &wire); err != nil {
 		return ChangePage{}, err
 	}
 	if wire.Watermark == nil || wire.Through == nil || wire.Changes == nil || len(wire.Changes) > pageLimit ||
@@ -189,6 +189,18 @@ type taskAvailability struct {
 }
 
 func (c *TaskClient) Available(ctx context.Context, keys []VersionKey) (map[VersionKey]bool, error) {
+	return c.available(ctx, keys, "")
+}
+
+func (c *TaskClient) DiagnosticEligible(ctx context.Context, learner string, keys []VersionKey) (map[VersionKey]bool, error) {
+	if !planner.ValidID(learner) {
+		return nil, errInvalidPage
+	}
+
+	return c.available(ctx, keys, learner)
+}
+
+func (c *TaskClient) available(ctx context.Context, keys []VersionKey, learner string) (map[VersionKey]bool, error) {
 	requested, err := validateVersionKeys(keys)
 	if err != nil {
 		return nil, err
@@ -202,7 +214,11 @@ func (c *TaskClient) Available(ctx context.Context, keys []VersionKey) (map[Vers
 		return nil, errInvalidPage
 	}
 	var output taskAvailability
-	if err := c.request(ctx, http.MethodPost, "availability", nil, raw, &output); err != nil {
+	path := "availability"
+	if learner != "" {
+		path = "diagnostic-eligibility"
+	}
+	if err := c.request(ctx, http.MethodPost, path, nil, raw, learner, &output); err != nil {
 		return nil, err
 	}
 	if output.Resources == nil || len(output.Resources) > len(keys) {
@@ -217,7 +233,7 @@ func (c *TaskClient) Available(ctx context.Context, keys []VersionKey) (map[Vers
 	return requested, nil
 }
 
-func (c *TaskClient) request(ctx context.Context, method, path string, query url.Values, raw []byte, target any) error {
+func (c *TaskClient) request(ctx context.Context, method, path string, query url.Values, raw []byte, learner string, target any) error {
 	address := c.base.JoinPath(path)
 	address.RawQuery = query.Encode()
 	req, err := http.NewRequestWithContext(ctx, method, address.String(), bytes.NewReader(raw))
@@ -226,6 +242,9 @@ func (c *TaskClient) request(ctx context.Context, method, path string, query url
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Accept", "application/json")
+	if learner != "" {
+		req.Header.Set("X-User-ID", learner)
+	}
 	if len(raw) > 0 {
 		req.Header.Set("Content-Type", "application/json")
 	}
