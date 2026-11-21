@@ -108,7 +108,7 @@ func Validate(in Request) error {
 
 func difficulty(value string) int {
 	switch value {
-	case "easy":
+	case difficultyEasy:
 		return 1
 	case "medium":
 		return 2

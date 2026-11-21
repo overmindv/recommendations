@@ -58,7 +58,7 @@ func topicInsights(in Request, topics map[string]Topic, results map[string]outco
 	insights := make([]TopicInsight, 0, len(ordered))
 	for _, id := range ordered {
 		level := recommendedLevel(accepted[id], failed[id])
-		insight := TopicInsight{TopicID: id, IsTarget: targets[id], AcceptedTasks: accepted[id], FailedTasks: failed[id], PlannedTasks: planned[id], RemainingToReadiness: max(0, ReadinessTasks-accepted[id]), RecommendedDifficulty: []string{"", "easy", "medium", difficultyHard}[level], BlockedBy: []string{}}
+		insight := TopicInsight{TopicID: id, IsTarget: targets[id], AcceptedTasks: accepted[id], FailedTasks: failed[id], PlannedTasks: planned[id], RemainingToReadiness: max(0, ReadinessTasks-accepted[id]), RecommendedDifficulty: []string{"", difficultyEasy, "medium", difficultyHard}[level], BlockedBy: []string{}}
 		ancestors := make(map[string]bool)
 		var collect func(string)
 		collect = func(current string) {
