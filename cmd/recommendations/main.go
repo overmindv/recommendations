@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/overmindv/recommendations/internal/goals"
 	"github.com/overmindv/recommendations/internal/httpapi"
 	"github.com/overmindv/recommendations/internal/learnergoals"
+	catalogprojection "github.com/overmindv/recommendations/internal/projection/catalog"
 	"github.com/overmindv/recommendations/internal/savedplans"
 	"github.com/overmindv/recommendations/internal/topiccatalog"
 )
@@ -35,11 +37,22 @@ func main() {
 		slog.Error("invalid catalog configuration", "error", err)
 		os.Exit(1)
 	}
+	var source *catalogprojection.Client
+	if cfg.CatalogSnapshotToken != "" {
+		source, err = catalogprojection.NewClient(cfg.EntitiesURL, cfg.CatalogSnapshotToken)
+		if err != nil {
+			slog.Error("invalid catalog projection configuration", "error", err)
+			os.Exit(1)
+		}
+	}
 	os.Exit(parker.Main(func(app *parker.App) error {
 		httpapi.RegisterAI(app.HTTP(), cfg.ServiceToken, engine)
 		var store goals.Store
 		var plans savedplans.Store
 		var onboarding learnergoals.Store
+		if source != nil && app.Config().DatabaseURL == "" {
+			return errors.New("catalog projection requires DATABASE_URL")
+		}
 		if app.Config().DatabaseURL != "" {
 			pool, err := app.Postgres()
 			if err != nil {
@@ -56,6 +69,10 @@ func main() {
 			})
 			onboarding = learnerStore
 			app.AddRunnable("learner-goal-requests", pruneGoalRequests(app.Logger(), learnerStore))
+			if source != nil {
+				worker := catalogprojection.NewWorker(catalogprojection.NewStore(pool), source, app.Logger())
+				app.AddRunnable("catalog-projection", worker.Run)
+			}
 		}
 		httpapi.RegisterGoals(app.HTTP(), cfg.ServiceToken, store)
 		httpapi.RegisterSavedPlans(app.HTTP(), cfg.ServiceToken, plans)
