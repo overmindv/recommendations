@@ -8,6 +8,7 @@
 | GET | `/v1/learner/goals/{id}/diagnostic` | Без тела |
 | PUT | `/v1/learner/goals/{id}/diagnostic` | `{"goal_version":1,"budget_minutes":15}` |
 | PUT | `/v1/learner/goals/{id}/diagnostic/skip` | `{"goal_version":1}` |
+| PUT | `/v1/learner/goals/{id}/diagnostic/finalize` | `{"goal_version":1,"session_id":"uuid","allow_partial":false}` |
 
 Запуск требует включенной проекции ресурсов. В бюджет входит до 20 минут,
 но не больше недельного времени цели. Если бюджет не задан, берется меньший
@@ -27,9 +28,27 @@
 Если закрепленная версия перестала быть доступной, сервер возвращает
 `DIAGNOSTIC_TASK_UNAVAILABLE`, без подстановки другой задачи.
 
-Пропуск доступен без связи с Tasks: статус `skipped`, базовый уровень `unknown`.
-Конечный срок нужен для учета результатов, но сам по себе ничего не говорит о
-знаниях. Прием подтвержденных результатов относится к отдельному этапу.
+## Итог сессии
+
+Закрытие принимает только версию цели, ID сессии и согласие на неполный отчет.
+Recommendations берет результаты из [учебного потока](learning-evidence.md).
+Для каждой закрепленной задачи учитывается первая независимая оценка владельца
+по точной версии и теме. Время оценки должно быть не раньше начала и строго до
+конца сессии. Чужие, пробные, технические и повторные оценки не восполняют пробелы.
+
+Отчет содержит число назначенных и оцененных задач, наблюдение и степень
+неопределенности по каждой теме. Неоцененная или невыбранная тема остается
+`unknown`. Даже верное решение дает наблюдение только по конкретной задаче,
+а не подтвержденный уровень знания.
+
+При неполном покрытии закрытие возвращает предварительный отчет, не меняя статус.
+До истечения срока можно повторить попытку; после задержки Kafka можно повторить
+запрос на закрытие. Чтобы сохранить неполный отчет, передай `allow_partial: true`.
+После закрытия (`finalized`) итог закрепляется. Повтор запроса, пропуск и позднее
+событие его не меняют. `GET` возвращает тот же отчет.
+
+Пропуск незакрытой сессии работает без связи с Tasks: статус `skipped`,
+базовый уровень `unknown`.
 
 ## Проверки
 
@@ -38,7 +57,16 @@
 ```sh
 make diagnostic-ctest
 go test ./internal/projection/resources -run '^$' -bench BenchmarkDiagnosticCatalogProjection -benchmem
+go test ./internal/diagnostic -run '^$' -bench BenchmarkDiagnosticAssessments -benchmem
 ```
 
-`diagnostic-ctest` использует `DIAGNOSTIC_TEST_DSN` и подменяет только HTTP-ответы
-Tasks. Замер выборки использует `RESOURCE_PROJECTION_TEST_DSN` и 50 тысяч задач.
+`diagnostic-ctest` использует `DIAGNOSTIC_TEST_DSN`. В сценарии подбора
+подменяются HTTP-ответы Tasks. Замер выборки использует
+`RESOURCE_PROJECTION_TEST_DSN` и 50 тысяч задач.
+Замер поиска оценок использует `DIAGNOSTIC_TEST_DSN` и 50 тысяч записей истории.
+
+Для проверки от Kafka до HTTP собери бинарник Recommendations, задай
+`DIAGNOSTIC_RUNTIME_BINARY` и запусти
+`go test ./cmd/recommendations -run TestDiagnosticRuntimeFinalization -count=1`.
+Нужны свежая БД `DIAGNOSTIC_TEST_DSN` после миграций и отдельный
+`DIAGNOSTIC_KAFKA_TEST_BROKERS` с топиками `learning.outcome.v1` и `content.learning.v1`.
