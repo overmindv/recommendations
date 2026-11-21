@@ -11,10 +11,14 @@ import (
 type Config struct {
 	ServiceToken string
 	HTTPAddress  string
+	EntitiesURL  string
 }
 
 func Load() (Config, error) {
-	c := Config{ServiceToken: os.Getenv("RECOMMENDATIONS_SERVICE_TOKEN")}
+	c := Config{
+		ServiceToken: os.Getenv("RECOMMENDATIONS_SERVICE_TOKEN"),
+		EntitiesURL:  strings.TrimSpace(os.Getenv("ENTITIES_URL")),
+	}
 	if len(c.ServiceToken) < 32 || len(c.ServiceToken) > 4096 || strings.ContainsAny(c.ServiceToken, " \t\r\n") {
 		return Config{}, errors.New("RECOMMENDATIONS_SERVICE_TOKEN must contain 32–4096 non-whitespace bytes")
 	}

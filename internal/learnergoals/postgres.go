@@ -13,14 +13,32 @@ import (
 )
 
 type Postgres struct {
-	pool *pgxpool.Pool
-	now  func() time.Time
+	pool     *pgxpool.Pool
+	now      func() time.Time
+	validate GoalValidator
 }
+
+type GoalValidator func(context.Context, Input) error
 
 var _ Store = (*Postgres)(nil)
 
 func NewPostgres(pool *pgxpool.Pool) *Postgres {
 	return &Postgres{pool: pool, now: time.Now}
+}
+
+func NewValidatedPostgres(pool *pgxpool.Pool, validate GoalValidator) *Postgres {
+	store := NewPostgres(pool)
+	store.validate = validate
+
+	return store
+}
+
+func (p *Postgres) validateGoal(in Input) func(context.Context) error {
+	if p.validate == nil {
+		return nil
+	}
+
+	return func(ctx context.Context) error { return p.validate(ctx, in) }
 }
 
 type queryer interface {
@@ -110,7 +128,7 @@ func (p *Postgres) SaveAvailability(ctx context.Context, actor string, write Wri
 	}
 	cmd := command{Operation: "availability", Version: write.ExpectedVersion, Body: in}
 
-	return executeWrite(ctx, p, actor, write.RequestID, cmd, func(tx pgx.Tx, _ time.Time) (Availability, error) {
+	return executeWrite(ctx, p, actor, write.RequestID, cmd, nil, func(tx pgx.Tx, _ time.Time) (Availability, error) {
 		existing, err := readAvailability(ctx, tx, actor)
 		switch {
 		case errors.Is(err, ErrNotFound) && write.ExpectedVersion == 0:
@@ -145,8 +163,11 @@ func (p *Postgres) Create(ctx context.Context, actor, requestID string, in Input
 	}
 	cmd := command{Operation: "create", Body: normalized}
 
-	return executeWrite(ctx, p, actor, requestID, cmd, func(tx pgx.Tx, now time.Time) (Goal, error) {
+	return executeWrite(ctx, p, actor, requestID, cmd, p.validateGoal(normalized), func(tx pgx.Tx, now time.Time) (Goal, error) {
 		availability, err := readAvailability(ctx, tx, actor)
+		if errors.Is(err, ErrNotFound) {
+			return Goal{}, ErrNoAvailability
+		}
 		if err != nil {
 			return Goal{}, err
 		}
@@ -188,7 +209,7 @@ func (p *Postgres) Update(ctx context.Context, actor, id string, write Write, in
 	}
 	cmd := command{Operation: "update", GoalID: id, Version: write.ExpectedVersion, Body: normalized}
 
-	return executeWrite(ctx, p, actor, write.RequestID, cmd, func(tx pgx.Tx, now time.Time) (Goal, error) {
+	return executeWrite(ctx, p, actor, write.RequestID, cmd, p.validateGoal(normalized), func(tx pgx.Tx, now time.Time) (Goal, error) {
 		old, err := readGoal(ctx, tx, actor, id)
 		if err != nil {
 			return Goal{}, err
@@ -237,7 +258,7 @@ func (p *Postgres) Delete(ctx context.Context, actor, id string, write Write) er
 		return ErrInvalid
 	}
 	cmd := command{Operation: "delete", GoalID: id, Version: write.ExpectedVersion}
-	_, err := executeWrite(ctx, p, actor, write.RequestID, cmd, func(tx pgx.Tx, _ time.Time) (struct{}, error) {
+	_, err := executeWrite(ctx, p, actor, write.RequestID, cmd, nil, func(tx pgx.Tx, _ time.Time) (struct{}, error) {
 		tag, err := tx.Exec(ctx, "DELETE FROM learner_goals WHERE user_id = $1 AND id = $2 AND version = $3",
 			actor, id, write.ExpectedVersion)
 		if err == nil && tag.RowsAffected() == 0 {
