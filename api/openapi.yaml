@@ -271,6 +271,20 @@ paths:
           $ref: '#/components/responses/StudyPlan'
         default:
           $ref: '#/components/responses/Error'
+  /v1/learner/goals/{id}/study-plan/steps/{ordinal}/start:
+    parameters:
+      - $ref: '#/components/parameters/Actor'
+      - $ref: '#/components/parameters/StudyPlanGoal'
+      - $ref: '#/components/parameters/StudyStepOrdinal'
+    put:
+      operationId: startStudyActivity
+      requestBody:
+        $ref: '#/components/requestBodies/StudyProgress'
+      responses:
+        '200':
+          $ref: '#/components/responses/StudyPlan'
+        default:
+          $ref: '#/components/responses/Error'
   /v1/learner/goals/{id}/study-plan/steps/{ordinal}/activity:
     parameters:
       - $ref: '#/components/parameters/Actor'
@@ -584,9 +598,15 @@ components:
           items:
             type: string
             format: uuid
+        activity_started_at:
+          type: string
+          format: date-time
         activity_completed_at:
           type: string
           format: date-time
+        superseded:
+          type: boolean
+          description: A failed checkpoint carried over for history without blocking the new route.
         assessment:
           type: object
           required: [verdict, graded_at]

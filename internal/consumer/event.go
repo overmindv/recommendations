@@ -15,11 +15,12 @@ import (
 )
 
 const (
-	TasksTopic    = "learning.outcome.v1"
-	maxEventBytes = 8 << 10
-	sourceTasks   = "tasks"
-	sourceContent = "content"
-	invalidEvent  = "invalid_event"
+	TasksTopic          = "learning.outcome.v1"
+	maxEventBytes       = 8 << 10
+	sourceTasks         = "tasks"
+	sourceContent       = "content"
+	independentEvidence = "independent"
+	invalidEvent        = "invalid_event"
 )
 
 type taskResult struct {
@@ -121,7 +122,7 @@ func (e taskEnvelope) valid(key string) bool {
 
 func (p taskResult) kind() string {
 	if *p.Independent {
-		return "independent"
+		return independentEvidence
 	}
 
 	return "non_independent"

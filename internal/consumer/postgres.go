@@ -5,16 +5,30 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/overmindv/recommendations/internal/mastery"
 )
 
 const batchLimit = 32
 
-type Postgres struct{ pool *pgxpool.Pool }
+type Postgres struct {
+	pool         *pgxpool.Pool
+	rebuildDelay time.Duration
+	baselines    *mastery.Postgres
+}
 
 func NewPostgres(pool *pgxpool.Pool) *Postgres { return &Postgres{pool: pool} }
+
+func NewPostgresWithPlanChanges(pool *pgxpool.Pool, delay time.Duration, baselines *mastery.Postgres) (*Postgres, error) {
+	if delay < time.Second || delay > 5*time.Minute || baselines == nil {
+		return nil, errors.New("invalid study plan change configuration")
+	}
+
+	return &Postgres{pool: pool, rebuildDelay: delay, baselines: baselines}, nil
+}
 
 const inboxSQL = `
 	INSERT INTO learning_evidence_inbox (source,event_id,fingerprint) VALUES ($1,$2,$3)
@@ -66,13 +80,18 @@ func (p *Postgres) apply(ctx context.Context, messages []message) error {
 	}
 
 	return pgx.BeginFunc(ctx, p.pool, func(tx pgx.Tx) error {
-		checks, err := applyBatch(ctx, tx, messages)
+		checks, submissions, err := applyBatch(ctx, tx, messages, p.rebuildDelay > 0)
 		if err != nil {
 			return fmt.Errorf("write evidence batch: %w", err)
 		}
 		for _, check := range checks {
 			if err := check.verify(ctx, tx); err != nil {
 				return fmt.Errorf("check evidence replay: %w", err)
+			}
+		}
+		if len(submissions) != 0 {
+			if rebuildErr := updateLearningPlans(ctx, tx, submissions, p.rebuildDelay, p.baselines); rebuildErr != nil {
+				return fmt.Errorf("apply evidence to study plans: %w", rebuildErr)
 			}
 		}
 
@@ -85,7 +104,7 @@ type replayCheck struct {
 	duplicate bool
 }
 
-func applyBatch(ctx context.Context, tx pgx.Tx, messages []message) ([]replayCheck, error) {
+func applyBatch(ctx context.Context, tx pgx.Tx, messages []message, collect bool) ([]replayCheck, []string, error) {
 	batch := &pgx.Batch{}
 	for _, msg := range messages {
 		switch {
@@ -103,24 +122,28 @@ func applyBatch(ctx context.Context, tx pgx.Tx, messages []message) ([]replayChe
 	results := tx.SendBatch(ctx, batch)
 	defer func() { _ = results.Close() }()
 	var checks []replayCheck
+	var submissions []string
 	for _, msg := range messages {
 		if msg.reject != "" {
 			if _, err := results.Exec(); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 
 			continue
 		}
 		var inserted, applied bool
 		if err := results.QueryRow().Scan(&inserted, &applied); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if !inserted || (msg.outcome != nil && !applied) {
 			checks = append(checks, replayCheck{msg, !inserted})
 		}
+		if collect && applied && msg.outcome != nil && (msg.outcome.kind() == independentEvidence || msg.outcome.Correction > 1) {
+			submissions = append(submissions, msg.outcome.SubmissionID)
+		}
 	}
 
-	return checks, results.Close()
+	return checks, submissions, results.Close()
 }
 
 func (c replayCheck) verify(ctx context.Context, tx pgx.Tx) error {

@@ -61,6 +61,10 @@ func (s *Service) CompleteActivity(ctx context.Context, actor, goal string, vers
 	return s.store.CompleteActivity(ctx, actor, goal, version, ordinal)
 }
 
+func (s *Service) StartActivity(ctx context.Context, actor, goal string, version int64, ordinal int) (View, error) {
+	return s.store.StartActivity(ctx, actor, goal, version, ordinal)
+}
+
 func (s *Service) Assess(ctx context.Context, actor, goal string, version int64, ordinal int) (View, error) {
 	return s.store.Assess(ctx, actor, goal, version, ordinal)
 }

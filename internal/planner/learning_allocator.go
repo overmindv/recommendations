@@ -66,10 +66,12 @@ type studyAllocator struct {
 	weeks   []LearningWeek
 	used    map[studyResourceID]bool
 	count   int
+	resume  int
+	carried map[string]map[StudyStage]int
 }
 
 func allocateStudy(ctx context.Context, request LearningRequest, graph studyGraph, book map[string]studyChoices,
-	calendar StudyCalendar) (LearningPlan, []string, error) {
+	calendar StudyCalendar, previous *LearningContinuation) (LearningPlan, []string, error) {
 	plan := LearningPlan{
 		Version: LearningPlanVersion, RankingAlgorithm: ranking.AlgorithmVersion, RankingPolicy: request.Ranking,
 		Timezone: calendar.Timezone, WeeklyMinutes: calendar.WeeklyMinutes, HorizonLimited: calendar.HorizonLimited,
@@ -79,6 +81,12 @@ func allocateStudy(ctx context.Context, request LearningRequest, graph studyGrap
 		plan.Weeks[i] = LearningWeek{StudyWeek: week, Items: []StudyItem{}}
 	}
 	allocator := studyAllocator{request: request, weeks: plan.Weeks, used: make(map[studyResourceID]bool)}
+	if previous != nil {
+		if err := allocator.preserve(calendar, previous.Weeks); err != nil {
+			return LearningPlan{}, nil, err
+		}
+		plan.Weeks = allocator.weeks
+	}
 	progress := make(map[string]studyProgress, len(graph.order))
 	unmet := make(map[string]bool)
 	for _, id := range graph.order {
@@ -96,12 +104,13 @@ func allocateStudy(ctx context.Context, request LearningRequest, graph studyGrap
 		state.usable = meetsThreshold(topic.Knowledge, request.Ranking.PrerequisiteMinBPS)
 		needed := !meetsThreshold(topic.Knowledge, graph.requirements[id])
 		resources := book[id]
+		remedial := previous != nil && previous.Remedial[id] && needed
 		if !needed && !resources.due {
 			progress[id] = state
 
 			continue
 		}
-		last, stage, reason, err := allocator.placeTopic(ctx, id, topic, state, resources, needed)
+		last, stage, reason, err := allocator.placeTopic(ctx, id, topic, state, resources, needed, remedial)
 		if err != nil {
 			return LearningPlan{}, nil, err
 		}
@@ -150,34 +159,53 @@ func meetsThreshold(knowledge *ranking.Knowledge, threshold int) bool {
 }
 
 func (a *studyAllocator) placeTopic(ctx context.Context, id string, topic ranking.Topic, state studyProgress,
-	choices studyChoices, needed bool) (int, StudyStage, string, error) {
+	choices studyChoices, needed, remedial bool) (int, StudyStage, string, error) {
 	stages := []struct {
 		name    StudyStage
 		options []studyOption
 	}{{StudyTheory, choices.theory}, {StudyPractice, choices.practice}, {StudyCheck, choices.checks}}
 	if !needed {
 		stages = stages[2:]
+	} else if remedial {
+		stages = slices.Delete(stages, 1, 2)
 	}
-	if a.count+len(stages) > MaxLearningItems {
+	carried := a.carried[id]
+	count := len(stages)
+	for _, stage := range stages {
+		if _, ok := carried[stage.name]; ok && (!remedial || stage.name != StudyTheory) {
+			count--
+		}
+	}
+	if a.count+count > MaxLearningItems {
 		return 0, "", unmetPlanLimit, nil
 	}
-	from := state.week
+	from := max(state.week, a.resume)
 	var placed [3]int
-	for i, stage := range stages {
+	n := 0
+	for _, stage := range stages {
+		if week, ok := carried[stage.name]; ok && (!remedial || stage.name != StudyTheory) {
+			from = max(from, week)
+
+			continue
+		}
 		var reserved string
 		if stage.name == StudyPractice {
 			reserved = a.onlyCheck(choices.checks, from)
 		}
 		week, best, reason, err := a.pick(ctx, id, topic.Knowledge, from, stage.options, !needed, reserved)
 		if err != nil || reason != "" {
-			for j := i - 1; j >= 0; j-- {
+			if err == nil && remedial && stage.name == StudyCheck && n > 0 {
+				return from, stage.name, reason, nil
+			}
+			for j := n - 1; j >= 0; j-- {
 				a.unplace(placed[j])
 			}
 
 			return 0, stage.name, reason, err
 		}
 		a.place(week, StudyItem{Ranked: best, Stage: stage.name, RequiresCheck: slices.Clone(state.guards)})
-		placed[i], from = week, week
+		placed[n], from = week, week
+		n++
 	}
 
 	return from, "", "", nil

@@ -48,6 +48,12 @@ type StudyItem struct {
 	ranking.Ranked
 	Stage         StudyStage `json:"stage"`
 	RequiresCheck []string   `json:"requires_checks,omitempty"`
+	Superseded    bool       `json:"superseded,omitempty"`
+}
+
+type LearningContinuation struct {
+	Weeks    []LearningWeek
+	Remedial map[string]bool
 }
 
 type LearningWeek struct {
@@ -98,7 +104,7 @@ func BuildLearningPlan(ctx context.Context, now time.Time, request LearningReque
 		return LearningPlan{}, err
 	}
 
-	plan, remaining, err := allocateStudy(ctx, request, graph, book, calendar)
+	plan, remaining, err := allocateStudy(ctx, request, graph, book, calendar, nil)
 	if err != nil {
 		return LearningPlan{}, err
 	}
@@ -115,7 +121,7 @@ func BuildLearningPlan(ctx context.Context, now time.Time, request LearningReque
 		if err != nil {
 			return LearningPlan{}, err
 		}
-		replayed, _, err := allocateStudy(ctx, request, graph, book, extended)
+		replayed, _, err := allocateStudy(ctx, request, graph, book, extended, nil)
 		if err != nil {
 			return LearningPlan{}, err
 		}
@@ -132,6 +138,27 @@ func BuildLearningPlan(ctx context.Context, now time.Time, request LearningReque
 	}
 
 	return plan, nil
+}
+
+func ContinueLearningPlan(ctx context.Context, now time.Time, request LearningRequest, previous LearningContinuation) (LearningPlan, error) {
+	graph, err := learningGraph(request)
+	if err != nil {
+		return LearningPlan{}, err
+	}
+	calendar, err := StudyWeeks(now, request.Budget)
+	if err != nil {
+		return LearningPlan{}, err
+	}
+	book, err := studyResources(request, calendar.location)
+	if err != nil {
+		return LearningPlan{}, err
+	}
+	plan, remaining, err := allocateStudy(ctx, request, graph, book, calendar, &previous)
+	if err == nil && len(remaining) < len(graph.targets) && len(plan.UnmetOutcomes) != 0 {
+		plan.Suggestions = append(plan.Suggestions, ScopeSuggestion{Kind: "reduce_scope", TopicIDs: remaining})
+	}
+
+	return plan, err
 }
 
 type studyGraph struct {
