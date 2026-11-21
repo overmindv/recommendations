@@ -15,6 +15,7 @@ import (
 	"github.com/overmindv/recommendations/internal/goals"
 	"github.com/overmindv/recommendations/internal/httpapi"
 	"github.com/overmindv/recommendations/internal/learnergoals"
+	"github.com/overmindv/recommendations/internal/mastery"
 	catalogprojection "github.com/overmindv/recommendations/internal/projection/catalog"
 	"github.com/overmindv/recommendations/internal/projection/resources"
 	"github.com/overmindv/recommendations/internal/savedplans"
@@ -86,11 +87,15 @@ func run() int {
 		var onboarding learnergoals.Store
 		var eligibility httpapi.ResourceCatalog
 		var sessions *diagnostic.Service
+		var baselines *mastery.Postgres
 		if source != nil && app.Config().DatabaseURL == "" {
 			return errors.New("catalog projection requires DATABASE_URL")
 		}
 		if cfg.Evidence.Enabled && app.Config().DatabaseURL == "" {
 			return errors.New("learning evidence requires DATABASE_URL")
+		}
+		if cfg.Mastery != nil && app.Config().DatabaseURL == "" {
+			return errors.New("mastery baseline requires DATABASE_URL")
 		}
 		if app.Config().DatabaseURL != "" {
 			pool, err := app.Postgres()
@@ -100,8 +105,8 @@ func run() int {
 			store = goals.NewPostgres(pool)
 			plans = &savedplans.Postgres{Pool: pool}
 			learnerStore := learnergoals.NewValidatedPostgres(pool, func(ctx context.Context, input learnergoals.Input) error {
-				if err := learnergoals.ValidateTemplate(input.TemplateVersion); err != nil {
-					return err
+				if templateErr := learnergoals.ValidateTemplate(input.TemplateVersion); templateErr != nil {
+					return templateErr
 				}
 
 				return catalog.Validate(ctx, input.TargetTopics)
@@ -122,6 +127,14 @@ func run() int {
 				eligibility, diagnosticCatalog = verified, verified
 			}
 			sessions = diagnostic.NewService(learnerStore, diagnostic.NewPostgres(pool), diagnosticCatalog)
+			if cfg.Mastery != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				baselines, err = mastery.NewPostgres(ctx, pool, *cfg.Mastery)
+				cancel()
+				if err != nil {
+					return err
+				}
+			}
 			if cfg.Evidence.Enabled {
 				options := append([]kgo.Opt{kgo.SeedBrokers(parker.EnvList("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")...)}, cfg.Evidence.KafkaOptions...)
 				worker := consumer.NewWorker(consumer.NewPostgres(pool), cfg.Evidence.ContentTopic, app.Logger(), options...)
@@ -133,6 +146,7 @@ func run() int {
 		httpapi.RegisterVerifiedSavedPlans(app.HTTP(), cfg.ServiceToken, plans, eligibility)
 		httpapi.RegisterOnboarding(app.HTTP(), cfg.ServiceToken, onboarding)
 		httpapi.RegisterDiagnostic(app.HTTP(), cfg.ServiceToken, sessions)
+		httpapi.RegisterMastery(app.HTTP(), cfg.ServiceToken, baselines)
 
 		return nil
 	}, parker.WithAppName("recommendations"), func(o *parker.Options) { o.HTTPAddress = cfg.HTTPAddress; o.WriteTimeout = 35 * time.Second })

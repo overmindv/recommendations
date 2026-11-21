@@ -115,6 +115,46 @@ paths:
           description: Deleted. Repeating the same successful deletion with the same key also returns 204.
         default:
           $ref: '#/components/responses/Error'
+  /v1/learner/goals/{id}/mastery:
+    parameters:
+      - $ref: '#/components/parameters/Actor'
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      operationId: getMasteryBaseline
+      responses:
+        '200':
+          $ref: '#/components/responses/Mastery'
+        '404':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+    put:
+      operationId: refreshMasteryBaseline
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [goal_version]
+              properties:
+                goal_version:
+                  type: integer
+                  format: int64
+                  minimum: 1
+      responses:
+        '200':
+          $ref: '#/components/responses/Mastery'
+        '409':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
 components:
   securitySchemes:
     gatewayToken:
@@ -164,6 +204,12 @@ components:
           schema:
             $ref: '#/components/schemas/GoalInput'
   responses:
+    Mastery:
+      description: The current versioned mastery snapshot for the authenticated learner's goal.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Mastery'
     Profile:
       description: Availability is null until the learner saves a weekly budget and time zone.
       content:
@@ -199,6 +245,76 @@ components:
               message:
                 type: string
   schemas:
+    Mastery:
+      type: object
+      required: [goal_id, goal_version, policy, computed_at, truncated, topics]
+      properties:
+        goal_id:
+          type: string
+          format: uuid
+        goal_version:
+          type: integer
+          format: int64
+          minimum: 1
+        policy:
+          type: object
+          required: [revision, algorithm, gap_max_bps, demonstrated_min_bps, min_weighted_tasks]
+          properties:
+            revision:
+              type: string
+              maxLength: 64
+            algorithm:
+              const: weighted-v1
+            gap_max_bps:
+              type: integer
+              minimum: 0
+              maximum: 9999
+            demonstrated_min_bps:
+              type: integer
+              minimum: 1
+              maximum: 10000
+            min_weighted_tasks:
+              type: integer
+              minimum: 1
+              maximum: 512
+        computed_at:
+          type: string
+          format: date-time
+        truncated:
+          type: boolean
+        topics:
+          type: array
+          minItems: 1
+          maxItems: 16
+          items:
+            $ref: '#/components/schemas/TopicMastery'
+    TopicMastery:
+      type: object
+      required: [topic_id, score_bps, sample_count, weight_micros, last_evidence_at, state, uncertainty]
+      properties:
+        topic_id:
+          type: string
+          format: uuid
+        score_bps:
+          type: [integer, 'null']
+          minimum: 0
+          maximum: 10000
+        sample_count:
+          type: integer
+          minimum: 0
+          maximum: 512
+        weight_micros:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 512000000
+        last_evidence_at:
+          type: [string, 'null']
+          format: date-time
+        state:
+          enum: [unknown, insufficient, gap, developing, demonstrated_in_sample]
+        uncertainty:
+          enum: [no_evidence, limited_sample, bounded_history, sufficient_for_policy]
     GoalTemplate:
       type: object
       required: [version, title, suggests_deadline]

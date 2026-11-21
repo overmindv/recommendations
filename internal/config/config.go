@@ -6,6 +6,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/overmindv/recommendations/internal/mastery"
 )
 
 type Config struct {
@@ -15,6 +17,7 @@ type Config struct {
 	CatalogSnapshotToken string
 	Resources            Resources
 	Evidence             Evidence
+	Mastery              *mastery.Policy
 }
 
 func Load() (Config, error) {
@@ -51,6 +54,11 @@ func Load() (Config, error) {
 	}
 
 	c.Evidence, err = loadEvidence(c.Resources)
+	if err != nil {
+		return Config{}, err
+	}
+
+	c.Mastery, err = loadMastery()
 	if err != nil {
 		return Config{}, err
 	}
