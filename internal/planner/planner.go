@@ -18,6 +18,7 @@ const (
 	reasonPracticeGap           = "PRACTICE_GAP"
 	reasonPrerequisite          = "PREREQUISITE"
 	actionCompletePrerequisites = "COMPLETE_PREREQUISITES"
+	difficultyEasy              = "easy"
 	difficultyHard              = "hard"
 )
 

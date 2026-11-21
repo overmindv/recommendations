@@ -2,7 +2,7 @@ package ranking
 
 import "regexp"
 
-const algorithmVersion = "resource-ranking-v1"
+const AlgorithmVersion = "resource-ranking-v1"
 
 var versionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
@@ -28,7 +28,7 @@ type Policy struct {
 	Weights             Factors `json:"weights"`
 }
 
-func (p Policy) valid() bool {
+func (p Policy) Valid() bool {
 	if !versionPattern.MatchString(p.Version) || p.TargetBPS < 1 || p.TargetBPS > maxBPS ||
 		p.UnknownGapBPS < 0 || p.UnknownGapBPS > maxBPS || p.PrerequisiteMinBPS < 1 || p.PrerequisiteMinBPS > maxBPS ||
 		p.MediumDifficultyBPS < 1 || p.MediumDifficultyBPS >= p.HardDifficultyBPS || p.HardDifficultyBPS > maxBPS {
