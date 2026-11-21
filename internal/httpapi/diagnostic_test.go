@@ -167,7 +167,7 @@ func TestPostgresDiagnosticSessions(t *testing.T) {
 	at := func(method, path, browserActor, body string, status int) diagnostic.Session {
 		t.Helper()
 		res := request(method, path, browserActor, workerToken, body)
-		if res.Code != status || res.Header().Get("Cache-Control") != "no-store" {
+		if res.Code != status || res.Header().Get("Cache-Control") != noStoreCache {
 			t.Fatal("unexpected response:", res.Code, res.Body.String())
 		}
 		var session diagnostic.Session

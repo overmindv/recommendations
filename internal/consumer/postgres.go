@@ -23,8 +23,18 @@ const inboxSQL = `
 const outcomeSQL = `
 	WITH new_event AS (` + inboxSQL + `), applied AS (
 	    INSERT INTO learning_task_outcomes AS o (event_id,submission_id,learner_id,task_id,task_version_id,
-	                                             topic_ids,verdict,evidence_kind,graded_at,correction_version)
-	    SELECT event_id,$4::uuid,$5::uuid,$6::uuid,$7::uuid,$8::uuid[],$9::text,$10::text,$11::timestamptz,$12::bigint FROM new_event
+	                                             topic_ids,verdict,evidence_kind,graded_at,correction_version,topic_weights)
+	    SELECT event_id,$4::uuid,$5::uuid,$6::uuid,$7::uuid,$8::uuid[],$9::text,$10::text,$11::timestamptz,$12::bigint,
+	           (SELECT array_agg(t.weight ORDER BY t.topic_id)
+	            FROM resource_projection_checkpoints AS c
+	            JOIN resource_projection_items AS i
+	              ON i.origin = c.origin AND i.generation = c.active_generation
+	             AND i.resource_id = $6::uuid AND i.revision_id = $7::uuid
+	            JOIN resource_projection_topics AS t
+	              ON t.origin = i.origin AND t.generation = i.generation AND t.resource_id = i.resource_id
+	            WHERE c.origin = 'tasks' AND c.active_generation > 0 AND t.topic_id = ANY($8::uuid[])
+	            HAVING count(*) = cardinality($8::uuid[]))
+	    FROM new_event
 	    ON CONFLICT (submission_id) DO UPDATE
 	    SET event_id=EXCLUDED.event_id, verdict=EXCLUDED.verdict, evidence_kind=EXCLUDED.evidence_kind,
 	        graded_at=EXCLUDED.graded_at, correction_version=EXCLUDED.correction_version
