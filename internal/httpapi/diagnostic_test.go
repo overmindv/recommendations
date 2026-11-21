@@ -23,6 +23,7 @@ import (
 )
 
 const diagnosticEligibilityPath = "/v1/internal/resources/diagnostic-eligibility"
+const resourceAvailabilityPath = "/v1/internal/resources/availability"
 
 func diagnosticTestID(n int) string {
 	return fmt.Sprintf("00000000-0000-4000-8000-%012x", n)
@@ -135,7 +136,7 @@ func TestPostgresDiagnosticSessions(t *testing.T) {
 
 				return
 			}
-		case "/v1/internal/resources/availability":
+		case resourceAvailabilityPath:
 			if revoked.Load() {
 				wire.Resources = slices.DeleteFunc(wire.Resources, func(key versionKey) bool { return key.ID == selected })
 			}

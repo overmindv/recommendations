@@ -164,7 +164,11 @@ func (a *studyAllocator) placeTopic(ctx context.Context, id string, topic rankin
 	from := state.week
 	var placed [3]int
 	for i, stage := range stages {
-		week, best, reason, err := a.pick(ctx, id, topic.Knowledge, from, stage.options, !needed)
+		var reserved string
+		if stage.name == StudyPractice {
+			reserved = a.onlyCheck(choices.checks, from)
+		}
+		week, best, reason, err := a.pick(ctx, id, topic.Knowledge, from, stage.options, !needed, reserved)
 		if err != nil || reason != "" {
 			for j := i - 1; j >= 0; j-- {
 				a.unplace(placed[j])
@@ -179,12 +183,39 @@ func (a *studyAllocator) placeTopic(ctx context.Context, id string, topic rankin
 	return from, "", "", nil
 }
 
+func (a *studyAllocator) onlyCheck(options []studyOption, from int) string {
+	var reserved string
+	for _, option := range options {
+		row := a.request.Resources[option.input]
+		if !row.Available || row.AlreadySolved || row.Recent || row.Minutes == 0 || a.used[studyResourceID{row.Kind, row.ID}] {
+			continue
+		}
+		if len(row.Languages) != 0 && len(a.request.AllowedLanguages) != 0 &&
+			!slices.ContainsFunc(row.Languages, func(language string) bool { return slices.Contains(a.request.AllowedLanguages, language) }) {
+			continue
+		}
+		canFit := slices.ContainsFunc(a.weeks[from:], func(week LearningWeek) bool {
+			return (option.reviewUntil == "" || week.Through <= option.reviewUntil) &&
+				week.CapacityMinutes-week.PlannedMinutes >= row.Minutes
+		})
+		if !canFit {
+			continue
+		}
+		if reserved != "" && reserved != row.ID {
+			return ""
+		}
+		reserved = row.ID
+	}
+
+	return reserved
+}
+
 func (a *studyAllocator) pick(ctx context.Context, id string, knowledge *ranking.Knowledge, from int, options []studyOption,
-	dueOnly bool) (int, ranking.Ranked, string, error) {
+	dueOnly bool, reserved string) (int, ranking.Ranked, string, error) {
 	usable := make([]studyOption, 0, len(options))
 	for _, option := range options {
 		row := a.request.Resources[option.input]
-		if row.Minutes > 0 && (!dueOnly || row.DueReview) && !a.used[studyResourceID{row.Kind, row.ID}] {
+		if row.ID != reserved && row.Minutes > 0 && (!dueOnly || row.DueReview) && !a.used[studyResourceID{row.Kind, row.ID}] {
 			usable = append(usable, option)
 		}
 	}
