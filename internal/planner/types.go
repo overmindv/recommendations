@@ -30,12 +30,13 @@ type Topic struct {
 }
 
 type Task struct {
-	ID            string `json:"id"`
-	TaskVersionID string `json:"task_version_id"`
-	TopicID       string `json:"topic_id"`
-	Title         string `json:"title"`
-	Difficulty    string `json:"difficulty"`
-	TaskType      string `json:"task_type"`
+	CatalogMinutes int    `json:"-"`
+	ID             string `json:"id"`
+	TaskVersionID  string `json:"task_version_id"`
+	TopicID        string `json:"topic_id"`
+	Title          string `json:"title"`
+	Difficulty     string `json:"difficulty"`
+	TaskType       string `json:"task_type"`
 }
 
 type Evidence struct {

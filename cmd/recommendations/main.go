@@ -14,42 +14,75 @@ import (
 	"github.com/overmindv/recommendations/internal/httpapi"
 	"github.com/overmindv/recommendations/internal/learnergoals"
 	catalogprojection "github.com/overmindv/recommendations/internal/projection/catalog"
+	"github.com/overmindv/recommendations/internal/projection/resources"
 	"github.com/overmindv/recommendations/internal/savedplans"
 	"github.com/overmindv/recommendations/internal/topiccatalog"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-func main() {
+func main() { os.Exit(run()) }
+
+func run() int {
 	if len(os.Args) > 1 && os.Args[1] != "serve" {
-		os.Exit(parker.Main(nil, parker.WithAppName("recommendations")))
+		return parker.Main(nil, parker.WithAppName("recommendations"))
 	}
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("invalid configuration", "error", err)
-		os.Exit(1)
+
+		return 1
 	}
 	engine, err := aiplan.FromEnv()
 	if err != nil {
 		slog.Error("invalid AI configuration", "error", err)
-		os.Exit(1)
+
+		return 1
 	}
 	catalog, err := topiccatalog.New(cfg.EntitiesURL)
 	if err != nil {
 		slog.Error("invalid catalog configuration", "error", err)
-		os.Exit(1)
+
+		return 1
 	}
 	var source *catalogprojection.Client
 	if cfg.CatalogSnapshotToken != "" {
 		source, err = catalogprojection.NewClient(cfg.EntitiesURL, cfg.CatalogSnapshotToken)
 		if err != nil {
 			slog.Error("invalid catalog projection configuration", "error", err)
-			os.Exit(1)
+
+			return 1
 		}
 	}
-	os.Exit(parker.Main(func(app *parker.App) error {
-		httpapi.RegisterAI(app.HTTP(), cfg.ServiceToken, engine)
+	var taskSource *resources.TaskClient
+	var materialSource *resources.ContentClient
+	var materialLog *resources.MaterialLog
+	if cfg.Resources.Enabled {
+		if taskSource, err = resources.NewTaskClient(cfg.Resources.TasksURL, cfg.Resources.TasksToken); err != nil {
+			slog.Error("invalid tasks catalog configuration", "error", err)
+
+			return 1
+		}
+		defer taskSource.CloseIdleConnections()
+		if materialSource, err = resources.NewContentClient(cfg.Resources.ContentAddress, cfg.Resources.ContentToken); err != nil {
+			slog.Error("invalid content catalog configuration", "error", err)
+
+			return 1
+		}
+		defer func() { _ = materialSource.Close() }()
+		options := append([]kgo.Opt{kgo.SeedBrokers(parker.EnvList("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")...)}, cfg.Resources.KafkaOptions...)
+		if materialLog, err = resources.NewMaterialLog(cfg.Resources.MaterialTopic, options...); err != nil {
+			slog.Error("invalid material log configuration", "error", err)
+
+			return 1
+		}
+		defer materialLog.Close()
+	}
+
+	return parker.Main(func(app *parker.App) error {
 		var store goals.Store
 		var plans savedplans.Store
 		var onboarding learnergoals.Store
+		var eligibility httpapi.ResourceCatalog
 		if source != nil && app.Config().DatabaseURL == "" {
 			return errors.New("catalog projection requires DATABASE_URL")
 		}
@@ -73,13 +106,21 @@ func main() {
 				worker := catalogprojection.NewWorker(catalogprojection.NewStore(pool), source, app.Logger())
 				app.AddRunnable("catalog-projection", worker.Run)
 			}
+			if cfg.Resources.Enabled {
+				projected := resources.NewStore(pool)
+				app.AddHealthCheck("resource-projection", parker.HealthCheckFunc(projected.Ready))
+				app.AddRunnable("task-resource-projection", resources.NewTasksWorker(projected, taskSource, app.Logger()).Run)
+				app.AddRunnable("material-resource-projection", resources.NewContentWorker(projected, materialSource, materialLog, app.Logger()).Run)
+				eligibility = resources.NewEligibility(projected, taskSource, materialSource)
+			}
 		}
+		httpapi.RegisterVerifiedAI(app.HTTP(), cfg.ServiceToken, engine, eligibility)
 		httpapi.RegisterGoals(app.HTTP(), cfg.ServiceToken, store)
-		httpapi.RegisterSavedPlans(app.HTTP(), cfg.ServiceToken, plans)
+		httpapi.RegisterVerifiedSavedPlans(app.HTTP(), cfg.ServiceToken, plans, eligibility)
 		httpapi.RegisterOnboarding(app.HTTP(), cfg.ServiceToken, onboarding)
 
 		return nil
-	}, parker.WithAppName("recommendations"), func(o *parker.Options) { o.HTTPAddress = cfg.HTTPAddress; o.WriteTimeout = 35 * time.Second }))
+	}, parker.WithAppName("recommendations"), func(o *parker.Options) { o.HTTPAddress = cfg.HTTPAddress; o.WriteTimeout = 35 * time.Second })
 }
 
 func pruneGoalRequests(log *slog.Logger, store *learnergoals.Postgres) parker.Runnable {
