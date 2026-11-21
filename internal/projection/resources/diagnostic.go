@@ -6,29 +6,54 @@ import (
 	"time"
 
 	"github.com/overmindv/recommendations/internal/diagnostic"
+	"github.com/overmindv/recommendations/internal/mastery"
 	"github.com/overmindv/recommendations/internal/planner"
 )
 
 const diagnosticPerTopic = diagnostic.MaxCandidates / diagnostic.MaxTopics
+const retentionCandidates = 32
 
 func (e *Eligibility) SelectDiagnostic(ctx context.Context, actor string, targets []string, budget int) (diagnostic.Selection, error) {
+	scope, candidates, err := e.eligibleTaskCandidates(ctx, actor, targets, budget, diagnostic.MaxTopics-len(targets), diagnosticPerTopic)
+	if err != nil {
+		return diagnostic.Selection{}, err
+	}
+
+	return diagnostic.Select(scope, candidates, budget)
+}
+
+func (e *Eligibility) SelectRetentionTask(ctx context.Context, actor, topic string, budget int) (*mastery.ReviewTask, error) {
+	scope, candidates, err := e.eligibleTaskCandidates(ctx, actor, []string{topic}, budget, 0, retentionCandidates)
+	if err != nil {
+		return nil, err
+	}
+	selection, err := diagnostic.Select(scope, candidates, budget)
+	if err != nil || len(selection.Tasks) == 0 {
+		return nil, err
+	}
+	task := selection.Tasks[0]
+
+	return &mastery.ReviewTask{TaskID: task.TaskID, VersionID: task.VersionID, Minutes: task.Minutes}, nil
+}
+
+func (e *Eligibility) eligibleTaskCandidates(ctx context.Context, actor string, targets []string, budget, prerequisites, limit int) (diagnostic.Scope, []diagnostic.Candidate, error) {
 	if !planner.ValidID(actor) || budget < 1 || budget > diagnostic.MaxMinutes ||
 		len(targets) < 1 || len(targets) > diagnostic.MaxTopics {
-		return diagnostic.Selection{}, diagnostic.ErrInvalidSelection
+		return diagnostic.Scope{}, nil, diagnostic.ErrInvalidSelection
 	}
 	for _, id := range targets {
 		if !planner.ValidID(id) {
-			return diagnostic.Selection{}, diagnostic.ErrInvalidSelection
+			return diagnostic.Scope{}, nil, diagnostic.ErrInvalidSelection
 		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	scope, candidates, err := e.diagnostic.diagnosticCandidates(ctx, targets, budget)
+	scope, candidates, err := e.diagnostic.diagnosticCandidates(ctx, targets, budget, prerequisites, limit)
 	if err != nil {
-		return diagnostic.Selection{}, ErrUnavailable
+		return diagnostic.Scope{}, nil, ErrUnavailable
 	}
 	if len(scope.Targets) != len(targets) {
-		return diagnostic.Selection{}, diagnostic.ErrTopicUnavailable
+		return diagnostic.Scope{}, nil, diagnostic.ErrTopicUnavailable
 	}
 	seen := make(map[VersionKey]bool, len(candidates))
 	keys := make([]VersionKey, 0, len(candidates))
@@ -43,7 +68,7 @@ func (e *Eligibility) SelectDiagnostic(ctx context.Context, actor string, target
 		return e.diagnosticCheck(ctx, actor, keys)
 	}, keys)
 	if err != nil {
-		return diagnostic.Selection{}, err
+		return diagnostic.Scope{}, nil, err
 	}
 	eligible := candidates[:0]
 	for _, row := range candidates {
@@ -52,7 +77,7 @@ func (e *Eligibility) SelectDiagnostic(ctx context.Context, actor string, target
 		}
 	}
 
-	return diagnostic.Select(scope, eligible, budget)
+	return scope, eligible, nil
 }
 
 func (e *Eligibility) CheckDiagnostic(ctx context.Context, tasks []diagnostic.Candidate) error {
@@ -121,11 +146,11 @@ const diagnosticCandidatesSQL = `
 	    LIMIT 1
 	) AS i ON true`
 
-func (s *Store) diagnosticCandidates(ctx context.Context, targets []string, budget int) (diagnostic.Scope, []diagnostic.Candidate, error) {
+func (s *Store) diagnosticCandidates(ctx context.Context, targets []string, budget, prerequisites, limit int) (diagnostic.Scope, []diagnostic.Candidate, error) {
 	if err := s.readyOrigin(ctx, Tasks); err != nil {
 		return diagnostic.Scope{}, nil, err
 	}
-	rows, err := s.pool.Query(ctx, diagnosticCandidatesSQL, targets, diagnostic.MaxTopics-len(targets), budget, diagnosticPerTopic)
+	rows, err := s.pool.Query(ctx, diagnosticCandidatesSQL, targets, prerequisites, budget, limit)
 	if err != nil {
 		return diagnostic.Scope{}, nil, fmt.Errorf("look up diagnostic candidates: %w", err)
 	}

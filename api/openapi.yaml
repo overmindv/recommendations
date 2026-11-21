@@ -155,6 +155,74 @@ paths:
           $ref: '#/components/responses/Error'
         default:
           $ref: '#/components/responses/Error'
+  /v1/learner/goals/{id}/retention:
+    parameters:
+      - $ref: '#/components/parameters/Actor'
+      - $ref: '#/components/parameters/RetentionGoal'
+    get:
+      operationId: getRetentionPlan
+      responses:
+        '200':
+          description: Current review status of the learner's target topics.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [goal_version, truncated, topics]
+                properties:
+                  goal_version:
+                    type: integer
+                    format: int64
+                    minimum: 1
+                  truncated:
+                    type: boolean
+                  topics:
+                    type: array
+                    minItems: 1
+                    maxItems: 16
+                    items:
+                      $ref: '#/components/schemas/TopicReview'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/learner/goals/{id}/retention/{topic}:
+    parameters:
+      - $ref: '#/components/parameters/Actor'
+      - $ref: '#/components/parameters/RetentionGoal'
+      - name: topic
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      operationId: assignRetentionCheck
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [goal_version, due_at]
+              properties:
+                goal_version:
+                  type: integer
+                  format: int64
+                  minimum: 1
+                due_at:
+                  type: string
+                  format: date-time
+      responses:
+        '200':
+          description: The assigned check, its result on replay, or no new task in the candidate window.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopicReview'
+        '409':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
 components:
   securitySchemes:
     gatewayToken:
@@ -162,6 +230,13 @@ components:
       scheme: bearer
       description: Internal gateway service token. Never sent to the browser.
   parameters:
+    RetentionGoal:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     Actor:
       name: X-User-ID
       in: header
@@ -245,6 +320,57 @@ components:
               message:
                 type: string
   schemas:
+    TopicReview:
+      type: object
+      required: [topic_id, status]
+      properties:
+        topic_id:
+          type: string
+          format: uuid
+        status:
+          enum: [unknown, current, due, assigned, expired, checked, no_new_task]
+        due_at:
+          type: string
+          format: date-time
+        check:
+          $ref: '#/components/schemas/RetentionCheck'
+    RetentionCheck:
+      type: object
+      required: [task_id, task_version_id, due_at, assigned_at, expires_at, estimated_minutes]
+      properties:
+        task_id:
+          type: string
+          format: uuid
+        task_version_id:
+          type: string
+          format: uuid
+        estimated_minutes:
+          type: integer
+          minimum: 1
+          maximum: 20
+        due_at:
+          type: string
+          format: date-time
+        assigned_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        result:
+          type: object
+          required: [verdict, graded_at, weight_micros]
+          properties:
+            verdict:
+              type: string
+            graded_at:
+              type: string
+              format: date-time
+            weight_micros:
+              type: integer
+              format: int64
+              minimum: 1
+              maximum: 1000000
     Mastery:
       type: object
       required: [goal_id, goal_version, policy, computed_at, truncated, topics]

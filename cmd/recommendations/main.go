@@ -88,6 +88,7 @@ func run() int {
 		var eligibility httpapi.ResourceCatalog
 		var sessions *diagnostic.Service
 		var baselines *mastery.Postgres
+		var retention *mastery.Retention
 		if source != nil && app.Config().DatabaseURL == "" {
 			return errors.New("catalog projection requires DATABASE_URL")
 		}
@@ -113,6 +114,7 @@ func run() int {
 			})
 			onboarding = learnerStore
 			var diagnosticCatalog diagnostic.Catalog
+			var verified *resources.Eligibility
 			app.AddRunnable("learner-goal-requests", pruneGoalRequests(app.Logger(), learnerStore))
 			if source != nil {
 				worker := catalogprojection.NewWorker(catalogprojection.NewStore(pool), source, app.Logger())
@@ -123,7 +125,7 @@ func run() int {
 				app.AddHealthCheck("resource-projection", parker.HealthCheckFunc(projected.Ready))
 				app.AddRunnable("task-resource-projection", resources.NewTasksWorker(projected, taskSource, app.Logger()).Run)
 				app.AddRunnable("material-resource-projection", resources.NewContentWorker(projected, materialSource, materialLog, app.Logger()).Run)
-				verified := resources.NewEligibility(projected, taskSource, materialSource)
+				verified = resources.NewEligibility(projected, taskSource, materialSource)
 				eligibility, diagnosticCatalog = verified, verified
 			}
 			sessions = diagnostic.NewService(learnerStore, diagnostic.NewPostgres(pool), diagnosticCatalog)
@@ -133,6 +135,9 @@ func run() int {
 				cancel()
 				if err != nil {
 					return err
+				}
+				if cfg.RetentionInterval > 0 {
+					retention = mastery.NewRetention(baselines, verified, cfg.RetentionInterval)
 				}
 			}
 			if cfg.Evidence.Enabled {
@@ -147,6 +152,7 @@ func run() int {
 		httpapi.RegisterOnboarding(app.HTTP(), cfg.ServiceToken, onboarding)
 		httpapi.RegisterDiagnostic(app.HTTP(), cfg.ServiceToken, sessions)
 		httpapi.RegisterMastery(app.HTTP(), cfg.ServiceToken, baselines)
+		httpapi.RegisterRetention(app.HTTP(), cfg.ServiceToken, retention)
 
 		return nil
 	}, parker.WithAppName("recommendations"), func(o *parker.Options) { o.HTTPAddress = cfg.HTTPAddress; o.WriteTimeout = 35 * time.Second })

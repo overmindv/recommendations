@@ -15,10 +15,14 @@ import (
 	"github.com/overmindv/recommendations/internal/mastery"
 )
 
+const (
+	unknownState       = "unknown"
+	wrongAnswerVerdict = "wrong_answer"
+)
+
 func TestPostgresMasteryAPI(t *testing.T) {
 	t.Parallel()
 
-	const unknownState = "unknown"
 	dsn := os.Getenv("MASTERY_TEST_DSN")
 	if dsn == "" {
 		t.Skip("MASTERY_TEST_DSN is required")
@@ -98,7 +102,7 @@ func TestPostgresMasteryAPI(t *testing.T) {
 	for i, kind := range []string{"independent", "independent", "non_independent"} {
 		verdict := "accepted"
 		if i == 0 {
-			verdict = "wrong_answer"
+			verdict = wrongAnswerVerdict
 		}
 		batch.Queue(`INSERT INTO learning_task_outcomes (submission_id,learner_id,task_id,task_version_id,topic_ids,
 			verdict,evidence_kind,graded_at,event_id,correction_version)
