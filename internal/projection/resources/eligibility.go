@@ -24,6 +24,8 @@ type availabilitySource interface {
 	Available(context.Context, []VersionKey) (map[VersionKey]bool, error)
 }
 
+type availabilityCheck func(context.Context, []VersionKey) (map[VersionKey]bool, error)
+
 type resourceReader interface {
 	lookup(context.Context, Origin, []lookupKey) (map[VersionKey]Candidate, error)
 	materials(context.Context, []string) ([]Candidate, error)
@@ -43,14 +45,19 @@ type Candidate struct {
 }
 
 type Eligibility struct {
-	store   resourceReader
-	tasks   availabilitySource
-	content availabilitySource
-	slots   *semaphore.Weighted
+	store           resourceReader
+	tasks           availabilitySource
+	content         availabilitySource
+	slots           *semaphore.Weighted
+	diagnostic      *Store
+	diagnosticCheck func(context.Context, string, []VersionKey) (map[VersionKey]bool, error)
 }
 
 func NewEligibility(store *Store, tasks *TaskClient, content *ContentClient) *Eligibility {
-	return newEligibility(store, tasks, content)
+	e := newEligibility(store, tasks, content)
+	e.diagnostic, e.diagnosticCheck = store, tasks.DiagnosticEligible
+
+	return e
 }
 
 func newEligibility(store resourceReader, tasks, content availabilitySource) *Eligibility {
@@ -119,7 +126,7 @@ func (e *Eligibility) verified(ctx context.Context, origin Origin, keys []lookup
 	if origin == Content {
 		source = e.content
 	}
-	available, err := e.check(ctx, source, selected)
+	available, err := e.check(ctx, source.Available, selected)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +165,7 @@ func (e *Eligibility) OutlineMaterials(ctx context.Context, topics, completed []
 			seen[c.Key] = true
 		}
 	}
-	available, err := e.check(ctx, e.content, keys)
+	available, err := e.check(ctx, e.content.Available, keys)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +182,7 @@ func (e *Eligibility) OutlineMaterials(ctx context.Context, topics, completed []
 	return result, nil
 }
 
-func (e *Eligibility) check(ctx context.Context, source availabilitySource, keys []VersionKey) (map[VersionKey]bool, error) {
+func (e *Eligibility) check(ctx context.Context, check availabilityCheck, keys []VersionKey) (map[VersionKey]bool, error) {
 	if len(keys) == 0 {
 		return nil, nil
 	}
@@ -191,7 +198,7 @@ func (e *Eligibility) check(ctx context.Context, source availabilitySource, keys
 				return err
 			}
 			defer e.slots.Release(1)
-			confirmed, err := source.Available(ctx, batch)
+			confirmed, err := check(ctx, batch)
 			response[i] = confirmed
 
 			return err

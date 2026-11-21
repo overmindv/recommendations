@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/overmindv/content/pkg/api/activity"
 	contentpb "github.com/overmindv/content/pkg/api/content"
+	"github.com/overmindv/recommendations/internal/diagnostic"
 	"github.com/overmindv/recommendations/internal/materialref"
 	"github.com/overmindv/recommendations/internal/planner"
 	"github.com/overmindv/recommendations/internal/savedplans"
@@ -35,6 +36,7 @@ const (
 	smokeRevision = "55555555-5555-4555-8555-555555555555"
 	smokePlan     = "66666666-6666-4666-8666-666666666666"
 	smokeEvent    = "77777777-7777-4777-8777-777777777777"
+	smokeGoal     = "88888888-8888-4888-8888-888888888888"
 )
 
 type smokeContent struct {
@@ -174,6 +176,24 @@ func TestResourceRuntimeSmoke(t *testing.T) {
 		}
 	}
 	checkPractice(1)
+	if _, err := pool.Exec(ctx, `
+		WITH profile AS (
+			INSERT INTO learner_availability (user_id,weekly_minutes,timezone)
+			VALUES ($1,60,'UTC') RETURNING user_id
+		)
+		INSERT INTO learner_goals (id,user_id,title,target_topics,weekly_minutes,active,preferences)
+		SELECT $2,user_id,'Fixture',ARRAY[$3::uuid],60,true,'{}' FROM profile`, smokeActor, smokeGoal, smokeTopic); err != nil {
+		t.Fatal(err)
+	}
+	diagnosticPath := "/v1/learner/goals/" + smokeGoal + "/diagnostic"
+	goalInput := map[string]int{"goal_version": 1}
+	diagnosticStatus, rawDiagnostic, diagnosticErr := call(http.MethodPut, diagnosticPath, goalInput)
+	var session diagnostic.Session
+	if decode := json.Unmarshal(rawDiagnostic, &session); diagnosticStatus != http.StatusOK || diagnosticErr != nil || decode != nil ||
+		session.Status != diagnostic.Ready || len(session.Tasks) != 1 || session.Tasks[0].VersionID != smokeRevision ||
+		session.StopRule.BudgetMinutes != 20 || session.EstimatedMinutes != 17 {
+		t.Fatal("runtime diagnostic selection:", diagnosticStatus, string(rawDiagnostic), diagnosticErr)
+	}
 	input := savedplans.Input{ID: smokePlan, Document: savedplans.Document{
 		Goal: "Fixture", Minutes: 60, SessionCount: 1, TopicIDs: []string{smokeTopic},
 		Tasks:     []savedplans.Task{{ID: smokeTask, VersionID: smokeRevision, Title: "Input title", Minutes: 17}},
@@ -185,6 +205,14 @@ func TestResourceRuntimeSmoke(t *testing.T) {
 	taskArchived.Store(true)
 	content.archived.Store(true)
 	checkPractice(0)
+	if status, body, err := call(http.MethodGet, diagnosticPath, nil); status != http.StatusConflict || err != nil {
+		t.Fatal("diagnostic accepted a withdrawn task:", status, string(body), err)
+	}
+	diagnosticStatus, rawDiagnostic, diagnosticErr = call(http.MethodPut, diagnosticPath+"/skip", goalInput)
+	if decode := json.Unmarshal(rawDiagnostic, &session); diagnosticStatus != http.StatusOK || diagnosticErr != nil || decode != nil ||
+		session.Status != diagnostic.Skipped || session.Baseline != diagnostic.BaselineUnknown || len(session.Tasks) != 0 {
+		t.Fatal("runtime diagnostic skip:", diagnosticStatus, string(rawDiagnostic), diagnosticErr)
+	}
 	code, body, err := call(http.MethodGet, "/v1/learning-plans/"+smokePlan, nil)
 	var plan savedplans.Plan
 	if decode := json.Unmarshal(body, &plan); code != http.StatusOK || err != nil || decode != nil ||
@@ -260,7 +288,12 @@ func smokeTasks(t *testing.T) (*httptest.Server, *atomic.Bool) {
 			_, _ = io.WriteString(w, `{"watermark":1,"resources":[{"event_id":"`+smokeEvent+`","event_type":"task.resource.updated","schema_version":1,"aggregate_id":"`+smokeTask+`","aggregate_version":1,"occurred_at":"2026-11-19T00:00:00Z","tombstone":false,"metadata":{"task_version_id":"`+smokeRevision+`","title":"Owner task","task_type":"single_choice","difficulty":"easy","estimated_minutes":17,"topic_weights":[{"topic_id":"`+smokeTopic+`","weight":1}],"languages":[]}}]}`)
 		case "/v1/internal/resources/changes":
 			_, _ = io.WriteString(w, `{"watermark":1,"through":1,"more":false,"changes":[]}`)
-		case "/v1/internal/resources/availability":
+		case "/v1/internal/resources/availability", "/v1/internal/resources/diagnostic-eligibility":
+			if strings.HasSuffix(r.URL.Path, "/diagnostic-eligibility") && r.Header.Get("X-User-ID") != smokeActor {
+				w.WriteHeader(http.StatusForbidden)
+
+				return
+			}
 			if archived.Load() {
 				_, _ = io.WriteString(w, `{"resources":[]}`)
 			} else {

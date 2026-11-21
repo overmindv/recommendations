@@ -10,6 +10,7 @@ import (
 	"github.com/overmindv/parker"
 	"github.com/overmindv/recommendations/internal/aiplan"
 	"github.com/overmindv/recommendations/internal/config"
+	"github.com/overmindv/recommendations/internal/diagnostic"
 	"github.com/overmindv/recommendations/internal/goals"
 	"github.com/overmindv/recommendations/internal/httpapi"
 	"github.com/overmindv/recommendations/internal/learnergoals"
@@ -83,6 +84,7 @@ func run() int {
 		var plans savedplans.Store
 		var onboarding learnergoals.Store
 		var eligibility httpapi.ResourceCatalog
+		var sessions *diagnostic.Service
 		if source != nil && app.Config().DatabaseURL == "" {
 			return errors.New("catalog projection requires DATABASE_URL")
 		}
@@ -101,6 +103,7 @@ func run() int {
 				return catalog.Validate(ctx, input.TargetTopics)
 			})
 			onboarding = learnerStore
+			var diagnosticCatalog diagnostic.Catalog
 			app.AddRunnable("learner-goal-requests", pruneGoalRequests(app.Logger(), learnerStore))
 			if source != nil {
 				worker := catalogprojection.NewWorker(catalogprojection.NewStore(pool), source, app.Logger())
@@ -111,13 +114,16 @@ func run() int {
 				app.AddHealthCheck("resource-projection", parker.HealthCheckFunc(projected.Ready))
 				app.AddRunnable("task-resource-projection", resources.NewTasksWorker(projected, taskSource, app.Logger()).Run)
 				app.AddRunnable("material-resource-projection", resources.NewContentWorker(projected, materialSource, materialLog, app.Logger()).Run)
-				eligibility = resources.NewEligibility(projected, taskSource, materialSource)
+				verified := resources.NewEligibility(projected, taskSource, materialSource)
+				eligibility, diagnosticCatalog = verified, verified
 			}
+			sessions = diagnostic.NewService(learnerStore, diagnostic.NewPostgres(pool), diagnosticCatalog)
 		}
 		httpapi.RegisterVerifiedAI(app.HTTP(), cfg.ServiceToken, engine, eligibility)
 		httpapi.RegisterGoals(app.HTTP(), cfg.ServiceToken, store)
 		httpapi.RegisterVerifiedSavedPlans(app.HTTP(), cfg.ServiceToken, plans, eligibility)
 		httpapi.RegisterOnboarding(app.HTTP(), cfg.ServiceToken, onboarding)
+		httpapi.RegisterDiagnostic(app.HTTP(), cfg.ServiceToken, sessions)
 
 		return nil
 	}, parker.WithAppName("recommendations"), func(o *parker.Options) { o.HTTPAddress = cfg.HTTPAddress; o.WriteTimeout = 35 * time.Second })
