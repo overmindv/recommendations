@@ -53,6 +53,17 @@ health-check PostgreSQL; Kafka не используется. Read-header timeou
 HTTP-обработчик ограничен 3s. Метрики HTTP не содержат user/task IDs. Профили и тела
 запросов не логируются; ответы содержат `Cache-Control: no-store`.
 
+## Проверка релиза
+
+На PR запускаются линтер, тесты, сборка и бенчмарки. Перед релизом запустите
+[Check release candidate](https://github.com/overmindv/infra/actions/workflows/release-e2e.yml)
+в Infra с содержимым `release.json` от кандидата. Прогон проверяет образы из
+манифеста и запускает сценарии API и браузера. Файл `observed-release.json`
+показывает, какие образы запустились. Для приемки нужен успешный прогон целиком.
+
+**Student and author journeys** можно запустить вручную для проверки сборки
+из исходников.
+
 ## Учебные цели
 
 `internal/learnergoals` хранит один недельный бюджет и часовой пояс пользователя.
