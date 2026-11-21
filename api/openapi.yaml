@@ -223,6 +223,82 @@ paths:
           $ref: '#/components/responses/Error'
         default:
           $ref: '#/components/responses/Error'
+  /v1/learner/goals/{id}/study-plan:
+    parameters:
+      - $ref: '#/components/parameters/Actor'
+      - $ref: '#/components/parameters/StudyPlanGoal'
+    get:
+      operationId: getCurrentStudyPlan
+      responses:
+        '200':
+          $ref: '#/components/responses/StudyPlan'
+        default:
+          $ref: '#/components/responses/Error'
+    put:
+      operationId: generateStudyPlan
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: Goal-scoped request UUID. Replay returns the originally saved version.
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [goal_version, availability_version, plan_version]
+              properties:
+                goal_version:
+                  type: integer
+                  format: int64
+                  minimum: 1
+                availability_version:
+                  type: integer
+                  format: int64
+                  minimum: 1
+                plan_version:
+                  type: integer
+                  format: int64
+                  minimum: 0
+                  description: Current version, or zero if the goal has no plan.
+      responses:
+        '200':
+          $ref: '#/components/responses/StudyPlan'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/learner/goals/{id}/study-plan/steps/{ordinal}/activity:
+    parameters:
+      - $ref: '#/components/parameters/Actor'
+      - $ref: '#/components/parameters/StudyPlanGoal'
+      - $ref: '#/components/parameters/StudyStepOrdinal'
+    put:
+      operationId: completeStudyActivity
+      requestBody:
+        $ref: '#/components/requestBodies/StudyProgress'
+      responses:
+        '200':
+          $ref: '#/components/responses/StudyPlan'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/learner/goals/{id}/study-plan/steps/{ordinal}/assessment:
+    parameters:
+      - $ref: '#/components/parameters/Actor'
+      - $ref: '#/components/parameters/StudyPlanGoal'
+      - $ref: '#/components/parameters/StudyStepOrdinal'
+    put:
+      operationId: recordStudyAssessment
+      requestBody:
+        $ref: '#/components/requestBodies/StudyProgress'
+      responses:
+        '200':
+          $ref: '#/components/responses/StudyPlan'
+        default:
+          $ref: '#/components/responses/Error'
 components:
   securitySchemes:
     gatewayToken:
@@ -230,6 +306,21 @@ components:
       scheme: bearer
       description: Internal gateway service token. Never sent to the browser.
   parameters:
+    StudyPlanGoal:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    StudyStepOrdinal:
+      name: ordinal
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 128
     RetentionGoal:
       name: id
       in: path
@@ -272,6 +363,19 @@ components:
         format: int64
         minimum: 1
   requestBodies:
+    StudyProgress:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [plan_version]
+            properties:
+              plan_version:
+                type: integer
+                format: int64
+                minimum: 1
     Goal:
       required: true
       content:
@@ -279,6 +383,16 @@ components:
           schema:
             $ref: '#/components/schemas/GoalInput'
   responses:
+    StudyPlan:
+      description: The saved study plan, versioned inputs and current progress.
+      headers:
+        Cache-Control:
+          schema:
+            const: no-store
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/StudyPlan'
     Mastery:
       description: The current versioned mastery snapshot for the authenticated learner's goal.
       content:
@@ -306,7 +420,7 @@ components:
     Error:
       description: >
         400 INVALID_ARGUMENT, 403 PERMISSION_DENIED, 404 NOT_FOUND, 409 PROFILE_REQUIRED,
-        VERSION_CONFLICT, IDEMPOTENCY_CONFLICT or GOAL_LIMIT, 413 body too large,
+        VERSION_CONFLICT, IDEMPOTENCY_CONFLICT, GOAL_LIMIT, STEP_BLOCKED, GRADE_PENDING or PLAN_LIMIT, 413 body too large,
         415 unsupported media type, 422 UNKNOWN_TOPIC, UNKNOWN_TEMPLATE or INFEASIBLE_GOAL,
         429 WRITE_LIMIT, or 503 SERVICE_UNAVAILABLE.
       content:
@@ -320,6 +434,168 @@ components:
               message:
                 type: string
   schemas:
+    StudyPlan:
+      type: object
+      required:
+        - goal_id
+        - version
+        - goal_version
+        - availability_version
+        - target_topics
+        - planner_version
+        - ranking_algorithm
+        - ranking_policy
+        - evidence_watermark
+        - evidence_policy
+        - created_at
+        - timezone
+        - weekly_minutes
+        - horizon_limited
+        - weeks
+        - unmet_outcomes
+        - suggestions
+        - current
+        - stale
+        - next_step
+        - goal_demonstrated
+      properties:
+        goal_id:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+        goal_version:
+          type: integer
+          format: int64
+          minimum: 1
+        availability_version:
+          type: integer
+          format: int64
+          minimum: 1
+        target_topics:
+          type: array
+          maxItems: 16
+          items:
+            type: string
+            format: uuid
+        planner_version:
+          type: string
+        ranking_algorithm:
+          type: string
+        ranking_policy:
+          type: object
+          required: [policy_version, weights]
+        evidence_policy:
+          type: object
+          required: [revision, algorithm]
+        evidence_watermark:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        created_at:
+          type: string
+          format: date-time
+        timezone:
+          type: string
+        weekly_minutes:
+          type: integer
+          minimum: 0
+          maximum: 10080
+        horizon_limited:
+          type: boolean
+        weeks:
+          type: array
+          maxItems: 26
+          items:
+            $ref: '#/components/schemas/StudyWeek'
+        unmet_outcomes:
+          type: array
+          items:
+            type: object
+        suggestions:
+          type: array
+          items:
+            type: object
+        current:
+          type: boolean
+        stale:
+          type: boolean
+        next_step:
+          type: [integer, 'null']
+          minimum: 1
+          maximum: 128
+        blocked_reason:
+          enum: [stale_plan, check_failed, unverified_prerequisite]
+        goal_demonstrated:
+          type: boolean
+    StudyWeek:
+      type: object
+      required: [from, through, capacity_minutes, planned_minutes, items]
+      properties:
+        from:
+          type: string
+          format: date
+        through:
+          type: string
+          format: date
+        capacity_minutes:
+          type: integer
+        planned_minutes:
+          type: integer
+        items:
+          type: array
+          maxItems: 128
+          items:
+            $ref: '#/components/schemas/StudyStep'
+    StudyStep:
+      type: object
+      required: [ordinal, kind, stage, resource_id, revision_id, topic_id, estimated_minutes, score, components]
+      properties:
+        ordinal:
+          type: integer
+          minimum: 1
+          maximum: 128
+        kind:
+          enum: [theory, practice]
+        stage:
+          enum: [theory, practice, independent_check]
+        resource_id:
+          type: string
+          format: uuid
+        revision_id:
+          type: string
+          format: uuid
+        topic_id:
+          type: string
+          format: uuid
+        estimated_minutes:
+          type: integer
+          minimum: 1
+        score:
+          type: integer
+          minimum: 0
+        components:
+          type: object
+          required: [gap, difficulty, duration, variety, due_review]
+        requires_checks:
+          type: array
+          maxItems: 64
+          items:
+            type: string
+            format: uuid
+        activity_completed_at:
+          type: string
+          format: date-time
+        assessment:
+          type: object
+          required: [verdict, graded_at]
+          properties:
+            verdict:
+              type: string
+            graded_at:
+              type: string
+              format: date-time
     TopicReview:
       type: object
       required: [topic_id, status]
