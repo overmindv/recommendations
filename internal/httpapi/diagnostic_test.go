@@ -22,6 +22,8 @@ import (
 	"github.com/overmindv/recommendations/internal/projection/resources"
 )
 
+const diagnosticEligibilityPath = "/v1/internal/resources/diagnostic-eligibility"
+
 func diagnosticTestID(n int) string {
 	return fmt.Sprintf("00000000-0000-4000-8000-%012x", n)
 }
@@ -122,7 +124,7 @@ func TestPostgresDiagnosticSessions(t *testing.T) {
 			return
 		}
 		switch r.URL.Path {
-		case "/v1/internal/resources/diagnostic-eligibility":
+		case diagnosticEligibilityPath:
 			historyChecks.Add(1)
 			switch r.Header.Get("X-User-ID") {
 			case actor:

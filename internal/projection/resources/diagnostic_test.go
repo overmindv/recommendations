@@ -43,7 +43,7 @@ func BenchmarkDiagnosticCatalogProjection(b *testing.B) {
 		b.Fatal(err)
 	}
 	for b.Loop() {
-		scope, candidates, err := store.diagnosticCandidates(ctx, topics[:1], 10)
+		scope, candidates, err := store.diagnosticCandidates(ctx, topics[:1], 10, diagnostic.MaxTopics-1, diagnosticPerTopic)
 		if err != nil || len(scope.Targets) != 1 || len(scope.Prerequisites) != diagnostic.MaxTopics-1 ||
 			len(candidates) != diagnostic.MaxCandidates {
 			b.Fatal("incorrect diagnostic candidate bounds:", len(scope.Targets), len(scope.Prerequisites), len(candidates), err)

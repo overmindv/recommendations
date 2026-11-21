@@ -96,7 +96,7 @@ func TestOnboardingDeadlineAndSkills(t *testing.T) {
 		},
 	}
 	view := presentGoal(goal, now)
-	if view.Feasibility != feasibilityNotEvaluated || len(view.Skills) != 1 || view.Skills[0].State != "unknown" {
+	if view.Feasibility != feasibilityNotEvaluated || len(view.Skills) != 1 || view.Skills[0].State != unknownState {
 		t.Fatal("goal was evaluated without evidence", view)
 	}
 	view = presentGoal(goal, now.Add(12*time.Hour))
