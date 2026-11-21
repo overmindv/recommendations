@@ -10,6 +10,7 @@ import (
 	"github.com/overmindv/parker"
 	"github.com/overmindv/recommendations/internal/aiplan"
 	"github.com/overmindv/recommendations/internal/config"
+	"github.com/overmindv/recommendations/internal/consumer"
 	"github.com/overmindv/recommendations/internal/diagnostic"
 	"github.com/overmindv/recommendations/internal/goals"
 	"github.com/overmindv/recommendations/internal/httpapi"
@@ -88,6 +89,9 @@ func run() int {
 		if source != nil && app.Config().DatabaseURL == "" {
 			return errors.New("catalog projection requires DATABASE_URL")
 		}
+		if cfg.Evidence.Enabled && app.Config().DatabaseURL == "" {
+			return errors.New("learning evidence requires DATABASE_URL")
+		}
 		if app.Config().DatabaseURL != "" {
 			pool, err := app.Postgres()
 			if err != nil {
@@ -118,6 +122,11 @@ func run() int {
 				eligibility, diagnosticCatalog = verified, verified
 			}
 			sessions = diagnostic.NewService(learnerStore, diagnostic.NewPostgres(pool), diagnosticCatalog)
+			if cfg.Evidence.Enabled {
+				options := append([]kgo.Opt{kgo.SeedBrokers(parker.EnvList("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")...)}, cfg.Evidence.KafkaOptions...)
+				worker := consumer.NewWorker(consumer.NewPostgres(pool), cfg.Evidence.ContentTopic, app.Logger(), options...)
+				app.AddRunnable("learning-evidence", worker.Run)
+			}
 		}
 		httpapi.RegisterVerifiedAI(app.HTTP(), cfg.ServiceToken, engine, eligibility)
 		httpapi.RegisterGoals(app.HTTP(), cfg.ServiceToken, store)

@@ -14,6 +14,7 @@ type Config struct {
 	EntitiesURL          string
 	CatalogSnapshotToken string
 	Resources            Resources
+	Evidence             Evidence
 }
 
 func Load() (Config, error) {
@@ -45,6 +46,11 @@ func Load() (Config, error) {
 		return Config{}, errors.New("HTTP port must be between 1 and 65535")
 	}
 	c.Resources, err = loadResources(c)
+	if err != nil {
+		return Config{}, err
+	}
+
+	c.Evidence, err = loadEvidence(c.Resources)
 	if err != nil {
 		return Config{}, err
 	}
