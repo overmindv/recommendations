@@ -20,16 +20,16 @@ const sessionSQL = `
 	SELECT s.id::text, s.goal_id::text, s.goal_version,
 	       CASE WHEN s.status = 'ready' AND s.expires_at <= statement_timestamp() THEN 'expired' ELSE s.status END,
 	       s.policy_version, s.max_tasks, s.budget_minutes, s.estimated_minutes,
-	       s.tasks, s.started_at, s.expires_at, s.skipped_at
+	       s.tasks, s.started_at, s.expires_at, s.skipped_at, s.finalized_at, s.report
 	FROM learner_goals AS g JOIN diagnostic_sessions AS s ON s.goal_id = g.id AND s.goal_version = g.version
 	WHERE g.user_id = $1 AND g.id = $2 AND g.version = $3`
 
 func readSession(row pgx.Row) (Session, error) {
 	var s Session
-	var raw []byte
+	var raw, report []byte
 	err := row.Scan(&s.ID, &s.GoalID, &s.GoalVersion, &s.Status, &s.StopRule.PolicyVersion,
 		&s.StopRule.MaxTasks, &s.StopRule.BudgetMinutes, &s.EstimatedMinutes, &raw,
-		&s.StartedAt, &s.ExpiresAt, &s.SkippedAt)
+		&s.StartedAt, &s.ExpiresAt, &s.SkippedAt, &s.FinalizedAt, &report)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Session{}, ErrNotStarted
 	}
@@ -38,6 +38,12 @@ func readSession(row pgx.Row) (Session, error) {
 	}
 	if err := json.Unmarshal(raw, &s.Tasks); err != nil {
 		return Session{}, fmt.Errorf("read diagnostic tasks: %w", err)
+	}
+	if report != nil {
+		s.Report = new(Report)
+		if reportErr := json.Unmarshal(report, s.Report); reportErr != nil {
+			return Session{}, fmt.Errorf("read diagnostic report: %w", reportErr)
+		}
 	}
 	s.Baseline = BaselineUnknown
 
@@ -58,7 +64,8 @@ const saveSessionSQL = `
 	SET id = EXCLUDED.id, goal_version = EXCLUDED.goal_version, status = EXCLUDED.status,
 	    policy_version = EXCLUDED.policy_version, max_tasks = EXCLUDED.max_tasks,
 	    budget_minutes = EXCLUDED.budget_minutes, estimated_minutes = EXCLUDED.estimated_minutes,
-	    tasks = EXCLUDED.tasks, started_at = EXCLUDED.started_at, expires_at = EXCLUDED.expires_at, skipped_at = EXCLUDED.skipped_at
+	    tasks = EXCLUDED.tasks, started_at = EXCLUDED.started_at, expires_at = EXCLUDED.expires_at, skipped_at = EXCLUDED.skipped_at,
+	    finalized_at = NULL, report = NULL
 	WHERE diagnostic_sessions.goal_version < EXCLUDED.goal_version`
 
 func (p *Postgres) save(ctx context.Context, goal learnergoals.Goal, selection Selection, skip bool) (Session, error) {
@@ -72,17 +79,8 @@ func (p *Postgres) save(ctx context.Context, goal learnergoals.Goal, selection S
 	var session Session
 	err = pgx.BeginFunc(ctx, p.pool, func(tx pgx.Tx) error {
 		// Версия цели не должна измениться между подбором и записью сессии.
-		var version int64
-		versionErr := tx.QueryRow(ctx, "SELECT version FROM learner_goals WHERE id = $1 AND user_id = $2 FOR SHARE",
-			goal.ID, goal.UserID).Scan(&version)
-		if errors.Is(versionErr, pgx.ErrNoRows) {
-			return learnergoals.ErrNotFound
-		}
-		if versionErr != nil {
-			return versionErr
-		}
-		if version != goal.Version {
-			return learnergoals.ErrConflict
+		if lockErr := lockGoalVersion(ctx, tx, goal); lockErr != nil {
+			return lockErr
 		}
 		status := Ready
 		if skip {
@@ -97,7 +95,7 @@ func (p *Postgres) save(ctx context.Context, goal learnergoals.Goal, selection S
 		if skip {
 			if _, skipErr := tx.Exec(ctx, `
 				UPDATE diagnostic_sessions SET status = 'skipped', skipped_at = statement_timestamp()
-				WHERE goal_id = $1 AND goal_version = $2 AND status <> 'skipped'`, goal.ID, goal.Version); skipErr != nil {
+				WHERE goal_id = $1 AND goal_version = $2 AND status NOT IN ('skipped', 'finalized')`, goal.ID, goal.Version); skipErr != nil {
 				return skipErr
 			}
 		}
@@ -111,4 +109,21 @@ func (p *Postgres) save(ctx context.Context, goal learnergoals.Goal, selection S
 	}
 
 	return session, nil
+}
+
+func lockGoalVersion(ctx context.Context, tx pgx.Tx, goal learnergoals.Goal) error {
+	var version int64
+	err := tx.QueryRow(ctx, "SELECT version FROM learner_goals WHERE id = $1 AND user_id = $2 FOR SHARE",
+		goal.ID, goal.UserID).Scan(&version)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return learnergoals.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if version != goal.Version {
+		return learnergoals.ErrConflict
+	}
+
+	return nil
 }

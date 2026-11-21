@@ -55,6 +55,19 @@ func RegisterDiagnostic(router Router, token string, service *diagnostic.Service
 		session, err := service.Skip(r.Context(), r.Header.Get("X-User-ID"), r.PathValue("id"), input.GoalVersion)
 		respondDiagnostic(w, session, err)
 	})
+	handle("PUT "+route+"/finalize", func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			GoalVersion  int64  `json:"goal_version"`
+			SessionID    string `json:"session_id"`
+			AllowPartial bool   `json:"allow_partial"`
+		}
+		if !decodeOnboarding(w, r, &input) {
+			return
+		}
+		session, err := service.Finalize(r.Context(), r.Header.Get("X-User-ID"), r.PathValue("id"),
+			input.SessionID, input.GoalVersion, input.AllowPartial)
+		respondDiagnostic(w, session, err)
+	})
 }
 
 func respondDiagnostic(w http.ResponseWriter, session diagnostic.Session, err error) {
@@ -69,6 +82,8 @@ func respondDiagnostic(w http.ResponseWriter, session diagnostic.Session, err er
 		writeJSON(w, http.StatusUnprocessableEntity, publicError{"DIAGNOSTIC_BUDGET", "Diagnostic exceeds goal time"})
 	case errors.Is(err, diagnostic.ErrTaskUnavailable):
 		writeJSON(w, http.StatusConflict, publicError{"DIAGNOSTIC_TASK_UNAVAILABLE", "A diagnostic task is unavailable"})
+	case errors.Is(err, diagnostic.ErrSessionChanged):
+		writeJSON(w, http.StatusConflict, publicError{"DIAGNOSTIC_SESSION_CHANGED", "Diagnostic session changed"})
 	case errors.Is(err, diagnostic.ErrInvalidSelection):
 		writeJSON(w, http.StatusBadRequest, publicError{"INVALID_ARGUMENT", "Invalid diagnostic request"})
 	default:
