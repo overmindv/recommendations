@@ -1,0 +1,339 @@
+openapi: 3.1.0
+info:
+  title: Recommendations learner onboarding
+  version: 1.0.0
+servers:
+  - url: http://recommendations:8080
+security:
+  - gatewayToken: []
+paths:
+  /v1/learner/goal-templates:
+    parameters:
+      - $ref: '#/components/parameters/Actor'
+    get:
+      operationId: listGoalTemplates
+      responses:
+        '200':
+          description: Versioned templates. Topics are selected from the catalog, not inferred from the template.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/GoalTemplate'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/learner/profile:
+    parameters:
+      - $ref: '#/components/parameters/Actor'
+    get:
+      operationId: getLearnerProfile
+      responses:
+        '200':
+          $ref: '#/components/responses/Profile'
+        default:
+          $ref: '#/components/responses/Error'
+    put:
+      operationId: saveLearnerProfile
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/ProfileVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AvailabilityInput'
+      responses:
+        '200':
+          $ref: '#/components/responses/Profile'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/learner/goals:
+    parameters:
+      - $ref: '#/components/parameters/Actor'
+    get:
+      operationId: listLearnerGoals
+      responses:
+        '200':
+          description: The learner's goals, including inactive goals, newest update first.
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 32
+                items:
+                  $ref: '#/components/schemas/Goal'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      operationId: createLearnerGoal
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        $ref: '#/components/requestBodies/Goal'
+      responses:
+        '201':
+          $ref: '#/components/responses/Goal'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/learner/goals/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Actor'
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      operationId: getLearnerGoal
+      responses:
+        '200':
+          $ref: '#/components/responses/Goal'
+        default:
+          $ref: '#/components/responses/Error'
+    put:
+      operationId: updateLearnerGoal
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/GoalVersion'
+      requestBody:
+        $ref: '#/components/requestBodies/Goal'
+      responses:
+        '200':
+          $ref: '#/components/responses/Goal'
+        default:
+          $ref: '#/components/responses/Error'
+    delete:
+      operationId: deleteLearnerGoal
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/GoalVersion'
+      responses:
+        '204':
+          description: Deleted. Repeating the same successful deletion with the same key also returns 204.
+        default:
+          $ref: '#/components/responses/Error'
+components:
+  securitySchemes:
+    gatewayToken:
+      type: http
+      scheme: bearer
+      description: Internal gateway service token. Never sent to the browser.
+  parameters:
+    Actor:
+      name: X-User-ID
+      in: header
+      required: true
+      description: Authenticated learner UUID set by the trusted gateway, never copied from the request body.
+      schema:
+        type: string
+        format: uuid
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Learner-scoped UUID. Successful writes are replayable for 24 hours.
+      schema:
+        type: string
+        format: uuid
+    ProfileVersion:
+      name: X-Expected-Version
+      in: header
+      required: true
+      description: Version returned by GET, or zero to create a profile.
+      schema:
+        type: integer
+        format: int64
+        minimum: 0
+    GoalVersion:
+      name: X-Expected-Version
+      in: header
+      required: true
+      description: Current goal version.
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+  requestBodies:
+    Goal:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/GoalInput'
+  responses:
+    Profile:
+      description: Availability is null until the learner saves a weekly budget and time zone.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [availability]
+            properties:
+              availability:
+                oneOf:
+                  - $ref: '#/components/schemas/Availability'
+                  - type: 'null'
+    Goal:
+      description: Learner-owned goal. A write response reflects the saved revision, including on replay.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Goal'
+    Error:
+      description: >
+        400 INVALID_ARGUMENT, 403 PERMISSION_DENIED, 404 NOT_FOUND, 409 PROFILE_REQUIRED,
+        VERSION_CONFLICT, IDEMPOTENCY_CONFLICT or GOAL_LIMIT, 413 body too large,
+        415 unsupported media type, 422 UNKNOWN_TOPIC, UNKNOWN_TEMPLATE or INFEASIBLE_GOAL,
+        429 WRITE_LIMIT, or 503 SERVICE_UNAVAILABLE.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [code, message]
+            properties:
+              code:
+                type: string
+              message:
+                type: string
+  schemas:
+    GoalTemplate:
+      type: object
+      required: [version, title, suggests_deadline]
+      properties:
+        version:
+          type: string
+          examples: ['exam:1']
+        title:
+          type: string
+        suggests_deadline:
+          type: boolean
+    WeeklyMinutes:
+      type: integer
+      minimum: 0
+      maximum: 10080
+      default: 0
+    AvailabilityInput:
+      type: object
+      required: [timezone]
+      properties:
+        weekly_minutes:
+          $ref: '#/components/schemas/WeeklyMinutes'
+        timezone:
+          type: string
+          maxLength: 64
+          description: IANA time zone name, or UTC.
+          examples: [Europe/Moscow]
+    Availability:
+      allOf:
+        - $ref: '#/components/schemas/AvailabilityInput'
+        - type: object
+          required: [user_id, weekly_minutes, version, updated_at]
+          properties:
+            user_id:
+              type: string
+              format: uuid
+            version:
+              type: integer
+              format: int64
+            updated_at:
+              type: string
+              format: date-time
+    GoalInput:
+      type: object
+      required: [title, target_topics]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 256
+          description: Trimmed title, at most 256 UTF-8 bytes.
+        template_version:
+          type: string
+          maxLength: 128
+          description: Optional version returned by the templates endpoint.
+        target_topics:
+          type: array
+          minItems: 1
+          maxItems: 16
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+        deadline:
+          type: string
+          format: date
+          description: Calendar date in the learner's time zone.
+        active:
+          type: boolean
+          default: false
+        weekly_minutes:
+          $ref: '#/components/schemas/WeeklyMinutes'
+          description: Positive for active goals. Active allocations share the profile budget.
+        languages:
+          $ref: '#/components/schemas/PreferenceLabels'
+        formats:
+          $ref: '#/components/schemas/PreferenceLabels'
+        self_assessments:
+          type: array
+          maxItems: 16
+          items:
+            type: object
+            required: [topic_id, level]
+            properties:
+              topic_id:
+                type: string
+                format: uuid
+              level:
+                type: string
+                enum: [unknown, beginner, intermediate, advanced]
+    PreferenceLabels:
+      type: array
+      maxItems: 8
+      uniqueItems: true
+      items:
+        type: string
+        pattern: '^[a-z][a-z0-9_-]{0,31}$'
+    Goal:
+      allOf:
+        - $ref: '#/components/schemas/GoalInput'
+        - type: object
+          required: [id, user_id, timezone, version, created_at, updated_at, skills, feasibility]
+          properties:
+            id:
+              type: string
+              format: uuid
+            user_id:
+              type: string
+              format: uuid
+            timezone:
+              type: string
+            version:
+              type: integer
+              format: int64
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+            skills:
+              type: array
+              items:
+                type: object
+                required: [topic_id, state]
+                properties:
+                  topic_id:
+                    type: string
+                    format: uuid
+                  state:
+                    type: string
+                    const: unknown
+            feasibility:
+              type: string
+              enum: [not_evaluated, infeasible]
+            feasibility_reason:
+              type: string
+              const: deadline_passed

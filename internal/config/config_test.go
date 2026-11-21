@@ -7,10 +7,23 @@ import (
 
 func cleanEnv(t *testing.T) {
 	t.Helper()
-	for _, key := range []string{"HTTP_ADDRESS", "HTTP_ADDR", "PORT"} {
+	for _, key := range []string{"HTTP_ADDRESS", "HTTP_ADDR", "PORT", "ENTITIES_URL"} {
 		t.Setenv(key, "")
 	}
 	t.Setenv("RECOMMENDATIONS_SERVICE_TOKEN", strings.Repeat("s", 32))
+}
+
+//nolint:paralleltest // t.Setenv меняет окружение процесса.
+func TestEntitiesURL(t *testing.T) {
+	cleanEnv(t)
+	t.Setenv("ENTITIES_URL", " http://entities:8080 ")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EntitiesURL != "http://entities:8080" {
+		t.Fatal("unexpected Entities address", cfg.EntitiesURL)
+	}
 }
 
 //nolint:paralleltest // t.Setenv изменяет process-wide environment
