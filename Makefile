@@ -1,4 +1,4 @@
-.PHONY: run build test ctest lint benchmark tidy migrate-up
+.PHONY: run build test ctest resource-ctest lint benchmark tidy migrate-up
 LOCAL_BIN := $(CURDIR)/bin
 GOLANGCI_LINT ?= $(LOCAL_BIN)/golangci-lint
 
@@ -17,6 +17,11 @@ ctest:
 	go test -race ./internal/learnergoals -run TestPostgres -count=1
 	go test -race ./internal/httpapi -run TestPostgresOnboarding -count=1
 	go test -race ./internal/projection/catalog -run TestPostgres -count=1
+
+resource-ctest:
+	@test -n "$${RESOURCE_PROJECTION_TEST_DSN:-}" || (echo "RESOURCE_PROJECTION_TEST_DSN must point to a dedicated test database"; exit 1)
+	@test -n "$${RESOURCE_KAFKA_TEST_BROKERS:-}" || (echo "RESOURCE_KAFKA_TEST_BROKERS must point to a dedicated test broker"; exit 1)
+	go test -race ./internal/projection/resources -count=1
 
 lint: $(GOLANGCI_LINT)
 	$(GOLANGCI_LINT) run

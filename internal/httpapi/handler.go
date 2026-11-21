@@ -33,15 +33,19 @@ type publicError struct {
 
 func Register(router Router, token string) { RegisterAI(router, token, aiplan.New()) }
 func RegisterAI(router Router, token string, engine *aiplan.Engine) {
-	router.Handle("POST /v1/practice-plan", newHandler(token, engine))
-	router.Handle("POST /v1/learning-outline", outlineHandler(token, engine))
+	RegisterVerifiedAI(router, token, engine, nil)
+}
+
+func RegisterVerifiedAI(router Router, token string, engine *aiplan.Engine, catalog ResourceCatalog) {
+	router.Handle("POST /v1/practice-plan", newHandler(token, engine, catalog))
+	router.Handle("POST /v1/learning-outline", outlineHandler(token, engine, catalog))
 }
 
 // NewHandler принимает только доверенный actor из аутентифицированного gateway.
-func NewHandler(token string) http.Handler { return newHandler(token, aiplan.New()) }
-func newHandler(token string, engine *aiplan.Engine) http.Handler {
+func NewHandler(token string) http.Handler { return newHandler(token, aiplan.New(), nil) }
+func newHandler(token string, engine *aiplan.Engine, catalog ResourceCatalog) http.Handler {
 	expected := sha256.Sum256([]byte(token))
-	endpoint := http.TimeoutHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { preview(w, r, engine) }), 27*time.Second, `{"code":"SERVICE_UNAVAILABLE","message":"Service unavailable"}`)
+	endpoint := http.TimeoutHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { preview(w, r, engine, catalog) }), 27*time.Second, `{"code":"SERVICE_UNAVAILABLE","message":"Service unavailable"}`)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", noStoreCache)
@@ -64,7 +68,7 @@ func authorized(r *http.Request, token string, expected [32]byte) bool {
 		planner.ValidID(r.Header.Get("X-User-ID"))
 }
 
-func preview(w http.ResponseWriter, r *http.Request, engine *aiplan.Engine) {
+func preview(w http.ResponseWriter, r *http.Request, engine *aiplan.Engine, catalog ResourceCatalog) {
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mediaType != jsonContentType {
 		writeJSON(w, http.StatusUnsupportedMediaType, publicError{codeInvalidArgument, "Expected application/json"})
@@ -94,6 +98,19 @@ func preview(w http.ResponseWriter, r *http.Request, engine *aiplan.Engine) {
 
 		return
 	}
+	if catalog != nil {
+		if validationErr := planner.Validate(input); validationErr != nil {
+			writeJSON(w, http.StatusBadRequest, publicError{codeInvalidArgument, "Invalid practice plan request"})
+
+			return
+		}
+		input.Tasks, err = catalog.PracticeTasks(r.Context(), input.Tasks)
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, publicError{"SERVICE_UNAVAILABLE", "Service unavailable"})
+
+			return
+		}
+	}
 	plan, err := engine.Build(r.Context(), input, r.Header.Get("X-User-ID"))
 	if errors.Is(err, planner.ErrInvalidInput) {
 		writeJSON(w, http.StatusBadRequest, publicError{codeInvalidArgument, "Invalid practice plan request"})
@@ -104,6 +121,14 @@ func preview(w http.ResponseWriter, r *http.Request, engine *aiplan.Engine) {
 		writeJSON(w, http.StatusServiceUnavailable, publicError{"SERVICE_UNAVAILABLE", "Service unavailable"})
 
 		return
+	}
+	if catalog != nil {
+		if err := confirmPlan(r.Context(), catalog, plan); err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, publicError{"SERVICE_UNAVAILABLE", "Service unavailable"})
+
+			return
+		}
+		plan.PolicyVersion = resourcePolicy
 	}
 	writeJSON(w, http.StatusOK, plan)
 }
