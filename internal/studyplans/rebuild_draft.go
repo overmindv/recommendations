@@ -10,7 +10,7 @@ import (
 
 func (b *ProjectedBuilder) Rebuild(ctx context.Context, base RebuildBase) (*Draft, error) {
 	before := base.Plan
-	input, now, watermark, err := b.inputs(ctx, base.Source.actor, before.GoalID, base.Source, before.RankingPolicy, before.EvidencePolicy)
+	input, now, evidence, err := b.inputs(ctx, base.Source.actor, before.GoalID, base.Source, before.RankingPolicy, before.EvidencePolicy)
 	if err != nil {
 		return nil, err
 	}
@@ -24,7 +24,8 @@ func (b *ProjectedBuilder) Rebuild(ctx context.Context, base RebuildBase) (*Draf
 		return nil, nil
 	}
 
-	return &Draft{Plan: plan, EvidenceWatermark: watermark, EvidencePolicy: before.EvidencePolicy, ScopeTopics: scope}, nil
+	return &Draft{Plan: plan, EvidenceWatermark: evidence.Watermark, EvidencePolicy: before.EvidencePolicy, ScopeTopics: scope,
+		EvidenceTopics: evidence.Topics, EvidenceCaptured: now}, nil
 }
 
 func continuation(view View) (planner.LearningContinuation, bool) {

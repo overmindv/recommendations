@@ -23,6 +23,30 @@ func NewStudySource(eligibility *Eligibility, recent time.Duration) *StudySource
 	return &StudySource{eligibility: eligibility, recent: recent}
 }
 
+func (s *StudySource) StudyAlternativeAvailable(ctx context.Context, resource ranking.ResourceKey) bool {
+	if s.eligibility == nil || !planner.ValidID(resource.ID) || !planner.ValidID(resource.RevisionID) {
+		return false
+	}
+	var owner availabilitySource
+	switch resource.Kind {
+	case ranking.Theory:
+		owner = s.eligibility.content
+	case ranking.Practice:
+		owner = s.eligibility.tasks
+	default:
+		return false
+	}
+	if owner == nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	key := VersionKey{ID: resource.ID, RevisionID: resource.RevisionID}
+	confirmed, err := s.eligibility.check(ctx, owner.Available, []VersionKey{key})
+
+	return err == nil && confirmed[key]
+}
+
 type studyCandidate struct {
 	planner.StudyResource
 	origin Origin

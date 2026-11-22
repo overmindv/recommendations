@@ -367,6 +367,29 @@ func TestPostgresGenerationUsesProjectedEvidence(t *testing.T) {
 var errSyntheticRollback = errors.New("discard test graph")
 
 func BenchmarkCurrentStudyPlan(b *testing.B) {
+	store, actor, goal := maxStudyPlanFixture(b)
+	b.ReportAllocs()
+	for b.Loop() {
+		view, err := store.Current(b.Context(), actor, goal)
+		if err != nil || view.Version != 1 || findItem(view, planner.MaxLearningItems) == nil {
+			b.Fatal("current plan was not loaded:", err)
+		}
+	}
+}
+
+func BenchmarkExplainStudyPlan(b *testing.B) {
+	store, actor, goal := maxStudyPlanFixture(b)
+	b.ReportAllocs()
+	for b.Loop() {
+		view, err := store.Explain(b.Context(), actor, goal, 1)
+		if err != nil || view.PlanVersion != 1 || len(view.Steps) != planner.MaxLearningItems {
+			b.Fatal("plan explanation was not loaded:", err)
+		}
+	}
+}
+
+func maxStudyPlanFixture(b *testing.B) (*Postgres, string, string) {
+	b.Helper()
 	ctx, pool := b.Context(), studyTestPool(b)
 	id := studySeed(b, pool)
 	actor, goal := id(1), id(3)
@@ -377,6 +400,8 @@ func BenchmarkCurrentStudyPlan(b *testing.B) {
 		b.Fatal(err)
 	}
 	draft := testDraft(b, source, id)
+	draft.EvidenceCaptured = time.Now().UTC()
+	draft.EvidenceTopics = []mastery.Topic{{ID: id(4), Uncertainty: testNoEvidence}}
 	ordinal := 0
 	for i := range draft.Plan.Weeks {
 		week := &draft.Plan.Weeks[i]
@@ -403,11 +428,6 @@ func BenchmarkCurrentStudyPlan(b *testing.B) {
 	if _, err := store.Save(ctx, actor, goal, input, source, draft); err != nil {
 		b.Fatal(err)
 	}
-	b.ReportAllocs()
-	for b.Loop() {
-		view, err := store.Current(ctx, actor, goal)
-		if err != nil || view.Version != 1 || findItem(view, planner.MaxLearningItems) == nil {
-			b.Fatal("current plan was not loaded:", err)
-		}
-	}
+
+	return store, actor, goal
 }

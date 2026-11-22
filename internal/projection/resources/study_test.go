@@ -1,9 +1,57 @@
 package resources
 
 import (
+	"context"
+	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
+
+	"github.com/overmindv/recommendations/internal/ranking"
 )
+
+func TestStudyAlternativeRequiresOwnerConfirmation(t *testing.T) {
+	t.Parallel()
+
+	key := VersionKey{ID: resourceID, RevisionID: revisionID}
+	task := ranking.ResourceKey{ID: key.ID, RevisionID: key.RevisionID, Kind: ranking.Practice}
+	confirmed := availabilityFunc(func(_ context.Context, keys []VersionKey) (map[VersionKey]bool, error) {
+		if len(keys) != 1 || keys[0] != key {
+			return nil, errors.New("unexpected resource version")
+		}
+
+		return map[VersionKey]bool{key: true}, nil
+	})
+	unavailable := availabilityFunc(func(context.Context, []VersionKey) (map[VersionKey]bool, error) {
+		return nil, ErrUnavailable
+	})
+	source := NewStudySource(newEligibility(nil, confirmed, unavailable), time.Hour)
+	if !source.StudyAlternativeAvailable(t.Context(), task) {
+		t.Fatal("confirmed task was hidden")
+	}
+	task.Kind = ranking.Theory
+	if source.StudyAlternativeAvailable(t.Context(), task) {
+		t.Fatal("an unavailable owner allowed a material")
+	}
+}
+
+func TestStudyAlternativeOwnerTimeout(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		owner := availabilityFunc(func(ctx context.Context, _ []VersionKey) (map[VersionKey]bool, error) {
+			<-ctx.Done()
+
+			return nil, ctx.Err()
+		})
+		started := time.Now()
+		source := NewStudySource(newEligibility(nil, owner, owner), time.Hour)
+		task := ranking.ResourceKey{ID: resourceID, RevisionID: revisionID, Kind: ranking.Practice}
+		if source.StudyAlternativeAvailable(t.Context(), task) || time.Since(started) != time.Second {
+			t.Fatal("owner timeout did not hide alternative within one second")
+		}
+	})
+}
 
 func BenchmarkStudyCandidateRead(b *testing.B) {
 	ctx, store := resourceTestStore(b)

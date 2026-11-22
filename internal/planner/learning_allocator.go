@@ -102,7 +102,8 @@ func allocateStudy(ctx context.Context, request LearningRequest, graph studyGrap
 			continue
 		}
 		state.usable = meetsThreshold(topic.Knowledge, request.Ranking.PrerequisiteMinBPS)
-		needed := !meetsThreshold(topic.Knowledge, graph.requirements[id])
+		required := graph.requirements[id]
+		needed := !meetsThreshold(topic.Knowledge, required)
 		resources := book[id]
 		remedial := previous != nil && previous.Remedial[id] && needed
 		if !needed && !resources.due {
@@ -110,7 +111,7 @@ func allocateStudy(ctx context.Context, request LearningRequest, graph studyGrap
 
 			continue
 		}
-		last, stage, reason, err := allocator.placeTopic(ctx, id, topic, state, resources, needed, remedial)
+		last, stage, reason, err := allocator.placeTopic(ctx, id, topic, state, resources, required, needed, remedial)
 		if err != nil {
 			return LearningPlan{}, nil, err
 		}
@@ -130,6 +131,7 @@ func allocateStudy(ctx context.Context, request LearningRequest, graph studyGrap
 			remaining = append(remaining, id)
 		}
 	}
+	allocator.selectAlternatives()
 
 	return plan, remaining, nil
 }
@@ -159,7 +161,7 @@ func meetsThreshold(knowledge *ranking.Knowledge, threshold int) bool {
 }
 
 func (a *studyAllocator) placeTopic(ctx context.Context, id string, topic ranking.Topic, state studyProgress,
-	choices studyChoices, needed, remedial bool) (int, StudyStage, string, error) {
+	choices studyChoices, required int, needed, remedial bool) (int, StudyStage, string, error) {
 	stages := []struct {
 		name    StudyStage
 		options []studyOption
@@ -192,7 +194,7 @@ func (a *studyAllocator) placeTopic(ctx context.Context, id string, topic rankin
 		if stage.name == StudyPractice {
 			reserved = a.onlyCheck(choices.checks, from)
 		}
-		week, best, reason, err := a.pick(ctx, id, topic.Knowledge, from, stage.options, !needed, reserved)
+		week, best, reason, err := a.pick(ctx, id, topic.Knowledge, from, stage.options, !needed, reserved, stage.name)
 		if err != nil || reason != "" {
 			if err == nil && remedial && stage.name == StudyCheck && n > 0 {
 				return from, stage.name, reason, nil
@@ -203,7 +205,9 @@ func (a *studyAllocator) placeTopic(ctx context.Context, id string, topic rankin
 
 			return 0, stage.name, reason, err
 		}
-		a.place(week, StudyItem{Ranked: best, Stage: stage.name, RequiresCheck: slices.Clone(state.guards)})
+		best.RequiresCheck = slices.Clone(state.guards)
+		best.Decision.RequiredBPS = required
+		a.place(week, best)
 		placed[n], from = week, week
 		n++
 	}
@@ -239,7 +243,7 @@ func (a *studyAllocator) onlyCheck(options []studyOption, from int) string {
 }
 
 func (a *studyAllocator) pick(ctx context.Context, id string, knowledge *ranking.Knowledge, from int, options []studyOption,
-	dueOnly bool, reserved string) (int, ranking.Ranked, string, error) {
+	dueOnly bool, reserved string, stage StudyStage) (int, StudyItem, string, error) {
 	usable := make([]studyOption, 0, len(options))
 	for _, option := range options {
 		row := a.request.Resources[option.input]
@@ -248,17 +252,21 @@ func (a *studyAllocator) pick(ctx context.Context, id string, knowledge *ranking
 		}
 	}
 	if len(usable) == 0 {
-		return 0, ranking.Ranked{}, unmetMissingResource, nil
+		return 0, StudyItem{}, unmetMissingResource, nil
+	}
+	limit := 1
+	if stage != StudyCheck {
+		limit = min(len(usable), ranking.MaxResult)
 	}
 	request := ranking.Request{
 		Topics:           map[string]ranking.Topic{id: {Knowledge: knowledge}},
-		AllowedLanguages: a.request.AllowedLanguages, Limit: 1,
+		AllowedLanguages: a.request.AllowedLanguages, Limit: limit,
 		Candidates: make([]ranking.Candidate, 0, len(usable)),
 	}
 	largestRejected := -1
 	for i := from; i < len(a.weeks); i++ {
 		if err := ctx.Err(); err != nil {
-			return 0, ranking.Ranked{}, "", err
+			return 0, StudyItem{}, "", err
 		}
 		slot := a.weeks[i]
 		request.BudgetMinutes = slot.CapacityMinutes - slot.PlannedMinutes
@@ -281,19 +289,31 @@ func (a *studyAllocator) pick(ctx context.Context, id string, knowledge *ranking
 		}
 		result, err := ranking.Rank(request, a.request.Ranking)
 		if err != nil {
-			return 0, ranking.Ranked{}, "", err
+			return 0, StudyItem{}, "", err
 		}
 		if len(result.Items) != 0 {
-			return i, result.Items[0], "", nil
+			item := StudyItem{Ranked: result.Items[0], Stage: stage, Decision: &StudyDecision{}}
+			if stage == StudyCheck {
+				item.Decision.ReviewDue = slices.ContainsFunc(usable, func(option studyOption) bool {
+					row := a.request.Resources[option.input]
+
+					return row.DueReview && row.ResourceKey == item.ResourceKey
+				})
+			} else if len(result.Items) > 1 {
+				item.Decision.alternatives = result.Items[1:]
+			}
+
+			return i, item, "", nil
 		}
 		if result.Filters.Budget == 0 {
-			return 0, ranking.Ranked{}, unmetMissingResource, nil
+			return 0, StudyItem{}, unmetMissingResource, nil
 		}
 		largestRejected = request.BudgetMinutes
 	}
 	cannotFit := largestRejected >= 0
 	if from >= len(a.weeks) {
 		request.Candidates = request.Candidates[:0]
+		request.Limit = 1
 		request.BudgetMinutes = ranking.MaxMinutes
 		request.PreviousKind = ""
 		for _, row := range usable {
@@ -301,7 +321,7 @@ func (a *studyAllocator) pick(ctx context.Context, id string, knowledge *ranking
 		}
 		result, err := ranking.Rank(request, a.request.Ranking)
 		if err != nil {
-			return 0, ranking.Ranked{}, "", err
+			return 0, StudyItem{}, "", err
 		}
 		cannotFit = len(result.Items) > 0
 	}
@@ -310,7 +330,28 @@ func (a *studyAllocator) pick(ctx context.Context, id string, knowledge *ranking
 		reason = unmetTimeBudget
 	}
 
-	return 0, ranking.Ranked{}, reason, nil
+	return 0, StudyItem{}, reason, nil
+}
+
+func (a *studyAllocator) selectAlternatives() {
+	for w := range a.weeks {
+		week := &a.weeks[w]
+		for i := range week.Items {
+			item := &week.Items[i]
+			if item.Decision == nil {
+				continue
+			}
+			budget := week.CapacityMinutes - week.PlannedMinutes + item.Minutes
+			for _, candidate := range item.Decision.alternatives {
+				if candidate.Minutes <= budget && !a.used[studyResourceID{candidate.Kind, candidate.ID}] {
+					item.Decision.Alternative = &StudyAlternative{ResourceKey: candidate.ResourceKey, Minutes: candidate.Minutes}
+
+					break
+				}
+			}
+			item.Decision.alternatives = nil
+		}
+	}
 }
 
 func (a *studyAllocator) place(week int, item StudyItem) {

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 
 type StudyPlans interface {
 	Current(context.Context, string, string) (studyplans.View, error)
+	Explain(context.Context, string, string, int64) (studyplans.Explanation, error)
 	Generate(context.Context, string, string, studyplans.Generation) (studyplans.View, error)
 	StartActivity(context.Context, string, string, int64, int) (studyplans.View, error)
 	CompleteActivity(context.Context, string, string, int64, int) (studyplans.View, error)
@@ -44,6 +46,23 @@ func RegisterStudyPlans(router Router, token string, service StudyPlans) {
 	handle("GET "+route, func(w http.ResponseWriter, r *http.Request) {
 		view, err := service.Current(r.Context(), r.Header.Get("X-User-ID"), r.PathValue("id"))
 		respondStudyPlan(w, view, err)
+	})
+	handle("GET "+route+"/explanation", func(w http.ResponseWriter, r *http.Request) {
+		query, err := url.ParseQuery(r.URL.RawQuery)
+		versions := query["plan_version"]
+		if err != nil || len(query) != 1 || len(versions) != 1 {
+			respondStudyPlan(w, nil, studyplans.ErrInvalid)
+
+			return
+		}
+		version, err := strconv.ParseInt(versions[0], 10, 64)
+		if err != nil || version < 1 || version > studyplans.MaxVersionsPerGoal || strconv.FormatInt(version, 10) != versions[0] {
+			respondStudyPlan(w, nil, studyplans.ErrInvalid)
+
+			return
+		}
+		value, err := service.Explain(r.Context(), r.Header.Get("X-User-ID"), r.PathValue("id"), version)
+		respondStudyPlan(w, value, err)
 	})
 	handle("PUT "+route, func(w http.ResponseWriter, r *http.Request) {
 		keys := r.Header.Values("Idempotency-Key")
@@ -99,7 +118,7 @@ func RegisterStudyPlans(router Router, token string, service StudyPlans) {
 	handle("PUT "+route+"/steps/{ordinal}/assessment", progress(StudyPlans.Assess))
 }
 
-func respondStudyPlan(w http.ResponseWriter, view studyplans.View, err error) {
+func respondStudyPlan(w http.ResponseWriter, view any, err error) {
 	switch {
 	case err == nil:
 		writeJSON(w, http.StatusOK, view)
