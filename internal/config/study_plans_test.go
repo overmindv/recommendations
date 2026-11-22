@@ -10,6 +10,7 @@ import (
 
 func TestStudyPlansRequireExplicitPolicy(t *testing.T) {
 	t.Setenv("RECOMMENDATIONS_GOAL_COMPLETION_ENABLED", "")
+	t.Setenv("RECOMMENDATIONS_STUDY_PROJECTION_MAX_AGE", "")
 	t.Setenv("RECOMMENDATIONS_STUDY_ADAPTATION_ENABLED", "")
 	t.Setenv("RECOMMENDATIONS_STUDY_PLANS_ENABLED", "")
 	if cfg, err := loadStudyPlans(Config{}); err != nil || cfg != nil {
@@ -24,8 +25,18 @@ func TestStudyPlansRequireExplicitPolicy(t *testing.T) {
 	t.Setenv("RECOMMENDATIONS_STUDY_RANKING_POLICY", policy)
 	t.Setenv("RECOMMENDATIONS_STUDY_RECENT_WINDOW", "24h")
 	if cfg, err := loadStudyPlans(prerequisites); err != nil || cfg == nil || cfg.Recent != 24*time.Hour ||
-		cfg.Ranking.Version != "test" || cfg.AdaptationWindow != 0 {
+		cfg.Ranking.Version != "test" || cfg.AdaptationWindow != 0 || cfg.ProjectionMaxAge != 90*time.Second {
 		t.Fatal("valid explicit policy rejected:", cfg, err)
+	}
+	for _, bad := range []string{"59s", "75s2ms", "16m"} {
+		t.Setenv("RECOMMENDATIONS_STUDY_PROJECTION_MAX_AGE", bad)
+		if _, err := loadStudyPlans(prerequisites); err == nil {
+			t.Fatal("invalid projection age accepted:", bad)
+		}
+	}
+	t.Setenv("RECOMMENDATIONS_STUDY_PROJECTION_MAX_AGE", "2m")
+	if cfg, err := loadStudyPlans(prerequisites); err != nil || cfg.ProjectionMaxAge != 2*time.Minute {
+		t.Fatal("could not configure the maximum projection age:", cfg, err)
 	}
 	t.Setenv("RECOMMENDATIONS_GOAL_COMPLETION_ENABLED", "true")
 	if cfg, err := loadStudyPlans(prerequisites); err != nil || !cfg.CompletionEvents || cfg.AdaptationWindow != 0 {

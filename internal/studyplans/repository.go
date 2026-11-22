@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -119,12 +120,23 @@ func (p *Postgres) Save(ctx context.Context, actor, goal string, input Generatio
 }
 
 func (p *Postgres) Current(ctx context.Context, actor, goal string) (View, error) {
+	return p.current(ctx, actor, goal, 0)
+}
+
+func (p *Postgres) current(ctx context.Context, actor, goal string, maxAge time.Duration) (View, error) {
 	if !planner.ValidID(actor) || !planner.ValidID(goal) {
 		return View{}, ErrInvalid
 	}
 	var view View
 	err := pgx.BeginTxFunc(ctx, p.pool, readOnly, func(tx pgx.Tx) error {
-		source, err := readSources(ctx, tx, actor, goal)
+		var source Sources
+		var value Freshness
+		var err error
+		if maxAge > 0 {
+			source, value, err = readSourcesWithFreshness(ctx, tx, actor, goal, maxAge)
+		} else {
+			source, err = readSources(ctx, tx, actor, goal)
+		}
 		if err != nil {
 			return err
 		}
@@ -132,6 +144,9 @@ func (p *Postgres) Current(ctx context.Context, actor, goal string) (View, error
 			return ErrNotFound
 		}
 		view, err = readView(ctx, tx, goal, source.PlanVersion, source)
+		if err == nil && maxAge > 0 {
+			view = restrictCatalog(view, value)
+		}
 
 		return err
 	})
@@ -156,22 +171,28 @@ func checkExpected(source Sources, input Generation) error {
 	return nil
 }
 
-func readSources(ctx context.Context, tx pgx.Tx, actor, goal string) (Sources, error) {
-	s := Sources{actor: actor}
-	var preferences []byte
-	err := tx.QueryRow(ctx, `
+const sourcesSQL = `
 		SELECT g.version,a.version,COALESCE(h.version,0),g.target_topics,g.preferences,g.active,
 		       a.timezone,COALESCE(to_char(g.deadline,'YYYY-MM-DD'),''),a.weekly_minutes,g.weekly_minutes,
 		       (SELECT COALESCE(sum(other.weekly_minutes),0) FROM learner_goals AS other
 		        WHERE other.user_id=g.user_id AND other.active AND other.id<>g.id),
-		       COALESCE(f.revision,0),f.paused_at,COALESCE(f.budget_from_plan,0),COALESCE(f.budget_goal_version,0)
+		       COALESCE(f.revision,0),f.paused_at,COALESCE(f.budget_from_plan,0),COALESCE(f.budget_goal_version,0),
+		       g.template_version
 		FROM learner_goals AS g JOIN learner_availability AS a ON a.user_id=g.user_id
 		LEFT JOIN study_plan_heads AS h ON h.goal_id=g.id
 		LEFT JOIN study_plan_feedback_state AS f ON f.goal_id=g.id
-		WHERE g.id=$1 AND g.user_id=$2`, goal, actor).
-		Scan(&s.GoalVersion, &s.AvailabilityVersion, &s.PlanVersion, &s.TargetTopics, &preferences, &s.Active,
-			&s.Budget.Timezone, &s.Budget.Deadline, &s.Budget.AvailableMinutes, &s.Budget.GoalMinutes, &s.Budget.ReservedMinutes,
-			&s.feedbackRevision, &s.pausedAt, &s.budgetFromPlan, &s.budgetGoalVersion)
+		WHERE g.id=$1 AND g.user_id=$2`
+
+func readSources(ctx context.Context, tx pgx.Tx, actor, goal string) (Sources, error) {
+	return scanSources(tx.QueryRow(ctx, sourcesSQL, goal, actor), actor)
+}
+
+func scanSources(row pgx.Row, actor string) (Sources, error) {
+	s := Sources{actor: actor}
+	var preferences []byte
+	err := row.Scan(&s.GoalVersion, &s.AvailabilityVersion, &s.PlanVersion, &s.TargetTopics, &preferences, &s.Active,
+		&s.Budget.Timezone, &s.Budget.Deadline, &s.Budget.AvailableMinutes, &s.Budget.GoalMinutes, &s.Budget.ReservedMinutes,
+		&s.feedbackRevision, &s.pausedAt, &s.budgetFromPlan, &s.budgetGoalVersion, &s.TemplateVersion)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Sources{}, ErrNotFound
 	}

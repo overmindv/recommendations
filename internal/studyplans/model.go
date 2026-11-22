@@ -14,15 +14,16 @@ import (
 const MaxVersionsPerGoal = 1024
 
 var (
-	ErrInvalid       = errors.New("invalid study plan request")
-	ErrNotFound      = errors.New("study plan or goal not found")
-	ErrConflict      = errors.New("study plan inputs changed")
-	ErrRequestUsed   = errors.New("study plan request key already used")
-	ErrLimit         = errors.New("study plan version limit reached")
-	ErrStepBlocked   = errors.New("study plan step is not actionable")
-	ErrPending       = errors.New("independent grade is not available")
-	ErrFeedbackLimit = errors.New("study plan feedback limit reached")
-	ErrBudget        = errors.New("study plan budget exceeds available minutes")
+	ErrInvalid             = errors.New("invalid study plan request")
+	ErrNotFound            = errors.New("study plan or goal not found")
+	ErrConflict            = errors.New("study plan inputs changed")
+	ErrRequestUsed         = errors.New("study plan request key already used")
+	ErrLimit               = errors.New("study plan version limit reached")
+	ErrStepBlocked         = errors.New("study plan step is not actionable")
+	ErrPending             = errors.New("independent grade is not available")
+	ErrFeedbackLimit       = errors.New("study plan feedback limit reached")
+	ErrBudget              = errors.New("study plan budget exceeds available minutes")
+	ErrResourceUnavailable = errors.New("study step resource is not available")
 )
 
 type Expected struct {
@@ -52,6 +53,7 @@ type Sources struct {
 	Expected
 	TargetTopics      []string
 	AllowedLanguages  []string
+	TemplateVersion   string
 	Budget            planner.StudyBudget
 	Active            bool
 	actor             string
@@ -68,6 +70,7 @@ type Draft struct {
 	ScopeTopics       []string
 	EvidenceTopics    []mastery.Topic
 	EvidenceCaptured  time.Time
+	Guidance          *Guidance
 }
 
 type Assessment struct {
@@ -114,9 +117,12 @@ type View struct {
 	HorizonLimited      bool                      `json:"horizon_limited"`
 	Weeks               []Week                    `json:"weeks"`
 	UnmetOutcomes       []planner.UnmetOutcome    `json:"unmet_outcomes"`
+	CoverageGaps        []planner.UnmetOutcome    `json:"coverage_gaps,omitempty"`
+	Guidance            *Guidance                 `json:"guidance,omitempty"`
 	Suggestions         []planner.ScopeSuggestion `json:"suggestions"`
 	Current             bool                      `json:"current"`
 	Stale               bool                      `json:"stale"`
+	Freshness           *Freshness                `json:"freshness,omitempty"`
 	PausedAt            *time.Time                `json:"paused_at,omitempty"`
 	NextStep            *int                      `json:"next_step"`
 	BlockedReason       string                    `json:"blocked_reason,omitempty"`

@@ -55,7 +55,8 @@ func saveState(ctx context.Context, tx pgx.Tx, previous, st State) error {
 	}
 	_, err := tx.Exec(ctx, `UPDATE catalog_projection_state SET revision=revision+1,
 		active_generation=$1, applied_through=$2, replay_watermark=$3, pending_generation=$4,
-		pending_watermark=$5, pending_cursor=$6, pending_rows=$7, rebuild=$8, rejected_watermark=$9
+		pending_watermark=$5, pending_cursor=$6, pending_rows=$7, rebuild=$8, rejected_watermark=$9,
+		last_synced_at=CASE WHEN active_generation=$1 THEN last_synced_at END
 		WHERE singleton`, st.ActiveGeneration, st.Through, st.ReplayWatermark, st.PendingGeneration,
 		st.PendingWatermark, st.PendingCursor, st.PendingRows, st.Rebuild, st.RejectedWatermark)
 

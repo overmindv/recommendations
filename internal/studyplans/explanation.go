@@ -24,6 +24,7 @@ type Explanation struct {
 	Stale       bool                `json:"stale"`
 	Steps       []StepExplanation   `json:"steps"`
 	Limits      []explanation.Limit `json:"limits"`
+	Freshness   *Freshness          `json:"freshness,omitempty"`
 }
 
 func (p *Postgres) Explain(ctx context.Context, actor, goal string, version int64) (Explanation, error) {

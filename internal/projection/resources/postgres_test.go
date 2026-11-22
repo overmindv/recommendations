@@ -202,7 +202,7 @@ func TestContentProjectionDeduplicatesAndRejectsConflictingVersions(t *testing.T
 	remove := testProjectionEvent(secondEventID, Record{ID: resourceID, Version: 23})
 	covered := testProjectionEvent(thirdEventID, testProjectionRecord(revisionID, 19, topicID, Content))
 	next := KafkaPosition{TopicID: pos.TopicID, Offsets: map[int32]int64{0: 13, 1: 17}}
-	if err := store.applyContent(ctx, state, next, []Event{remove, covered, old, old}); err != nil {
+	if err := store.applyContent(ctx, state, next, []Event{remove, covered, old, old}, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	state = readProgress(t, ctx, store, Content)
@@ -219,7 +219,7 @@ func TestContentProjectionDeduplicatesAndRejectsConflictingVersions(t *testing.T
 	conflict := remove
 	conflict.Fingerprint[0] ^= 1
 	next = KafkaPosition{TopicID: pos.TopicID, Offsets: map[int32]int64{0: 14, 1: 18}}
-	if err := store.applyContent(ctx, state, next, []Event{valid, conflict}); !errors.Is(err, errEventConflict) {
+	if err := store.applyContent(ctx, state, next, []Event{valid, conflict}, time.Time{}); !errors.Is(err, errEventConflict) {
 		t.Fatal("conflicting replay was not fenced:", err)
 	}
 	got := readProgress(t, ctx, store, Content)
