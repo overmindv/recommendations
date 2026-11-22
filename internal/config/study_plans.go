@@ -14,6 +14,8 @@ import (
 
 type StudyPlans struct {
 	Ranking          ranking.Policy
+	PolicySlot       string
+	MetricsToken     string
 	Recent           time.Duration
 	AdaptationWindow time.Duration
 	CompletionEvents bool
@@ -49,19 +51,21 @@ func loadStudyPlans(cfg Config) (*StudyPlans, error) {
 	if completion && (cfg.Evidence.ContentTopic == goalcompletion.Topic || cfg.Resources.MaterialTopic == goalcompletion.Topic) {
 		return nil, errors.New("goal completion topic must be separate from input topics")
 	}
-	raw := strings.TrimSpace(os.Getenv("RECOMMENDATIONS_STUDY_RANKING_POLICY"))
-	if raw == "" || len(raw) > 4096 {
-		return nil, errors.New("missing or oversized study ranking policy")
+	policy, slot, err := studyRanking()
+	if err != nil {
+		return nil, err
 	}
-	var policy ranking.Policy
-	decoder := json.NewDecoder(strings.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if decodeErr := decoder.Decode(&policy); decodeErr != nil || !policy.Valid() {
-		return nil, errors.New("invalid study ranking policy")
-	}
-	var trailing any
-	if !errors.Is(decoder.Decode(&trailing), io.EOF) {
-		return nil, errors.New("invalid study ranking policy")
+	metricsToken := os.Getenv("RECOMMENDATIONS_STUDY_METRICS_TOKEN")
+	if metricsToken != "" {
+		if len(metricsToken) < 32 || len(metricsToken) > 256 ||
+			strings.IndexFunc(metricsToken, func(c rune) bool { return c < '!' || c > '~' }) >= 0 {
+			return nil, errors.New("study metrics token must contain 32 to 256 visible ASCII bytes")
+		}
+		for _, token := range [...]string{cfg.ServiceToken, cfg.CatalogSnapshotToken, cfg.Resources.TasksToken, cfg.Resources.ContentToken} {
+			if metricsToken == token {
+				return nil, errors.New("study metrics require a separate token")
+			}
+		}
 	}
 	recent, err := time.ParseDuration(strings.TrimSpace(os.Getenv("RECOMMENDATIONS_STUDY_RECENT_WINDOW")))
 	if err != nil || recent < time.Hour || recent > 30*24*time.Hour || recent%time.Second != 0 {
@@ -74,7 +78,8 @@ func loadStudyPlans(cfg Config) (*StudyPlans, error) {
 			return nil, errors.New("study projection age must be a duration from 1m to 15m in whole seconds")
 		}
 	}
-	study := &StudyPlans{Ranking: policy, Recent: recent, CompletionEvents: completion, ProjectionMaxAge: maxAge}
+	study := &StudyPlans{Ranking: policy, PolicySlot: slot, MetricsToken: metricsToken,
+		Recent: recent, CompletionEvents: completion, ProjectionMaxAge: maxAge}
 	if adaptive {
 		window, windowErr := time.ParseDuration(strings.TrimSpace(os.Getenv("RECOMMENDATIONS_STUDY_ADAPTATION_WINDOW")))
 		if windowErr != nil || window < time.Second || window > 5*time.Minute || window%time.Second != 0 {
@@ -84,4 +89,38 @@ func loadStudyPlans(cfg Config) (*StudyPlans, error) {
 	}
 
 	return study, nil
+}
+
+const (
+	studyPolicyCurrent  = "current"
+	studyPolicyPrevious = "previous"
+)
+
+func studyRanking() (ranking.Policy, string, error) {
+	slot := strings.TrimSpace(os.Getenv("RECOMMENDATIONS_STUDY_RANKING_POLICY_SLOT"))
+	key := "RECOMMENDATIONS_STUDY_RANKING_POLICY"
+	switch slot {
+	case "", studyPolicyCurrent:
+		slot = studyPolicyCurrent
+	case studyPolicyPrevious:
+		key = "RECOMMENDATIONS_STUDY_RANKING_PREVIOUS_POLICY"
+	default:
+		return ranking.Policy{}, "", errors.New("study ranking policy slot must be current or previous")
+	}
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" || len(raw) > 4096 {
+		return ranking.Policy{}, "", errors.New("missing or oversized study ranking policy in " + key)
+	}
+	var policy ranking.Policy
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&policy); err != nil || !policy.Valid() {
+		return ranking.Policy{}, "", errors.New("invalid study ranking policy in " + key)
+	}
+	var trailing any
+	if !errors.Is(decoder.Decode(&trailing), io.EOF) {
+		return ranking.Policy{}, "", errors.New("invalid study ranking policy in " + key)
+	}
+
+	return policy, slot, nil
 }

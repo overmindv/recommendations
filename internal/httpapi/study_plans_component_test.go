@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	contentpb "github.com/overmindv/content/pkg/api/content"
 	"github.com/overmindv/recommendations/internal/mastery"
+	"github.com/overmindv/recommendations/internal/observability"
 	"github.com/overmindv/recommendations/internal/planner"
 	"github.com/overmindv/recommendations/internal/projection/catalog"
 	"github.com/overmindv/recommendations/internal/projection/resources"
@@ -192,8 +193,9 @@ func TestPostgresStudyPlanThroughOwners(t *testing.T) {
 	evidence := mastery.Policy{Revision: "test-study-evidence", Algorithm: mastery.AlgorithmVersion, GapMaxBPS: 2500,
 		DemonstratedBPS: 6000, MinWeightedTasks: 1}
 	const maxAge = 90 * time.Second
-	builder := studyplans.NewProjectedBuilder(pool, source, policy, evidence).WithProjectionFreshness(maxAge)
-	service := studyplans.NewService(studyplans.NewPostgres(pool), builder).WithLiveCatalog(source, maxAge)
+	metrics := observability.NewStudy(nil, policy.Version, "current", false)
+	builder := studyplans.NewProjectedBuilder(pool, source, policy, evidence).WithProjectionFreshness(maxAge).WithMetrics(metrics)
+	service := studyplans.NewService(studyplans.NewPostgres(pool), builder).WithLiveCatalog(source, maxAge).WithMetrics(metrics)
 	router := http.NewServeMux()
 	serviceToken := strings.Repeat("w", 32)
 	RegisterStudyPlans(router, serviceToken, service)
@@ -299,6 +301,26 @@ func TestPostgresStudyPlanThroughOwners(t *testing.T) {
 	if old.Version != 1 || old.Freshness == nil || old.Freshness.Status != staleStatus || old.NextStep != nil ||
 		ownerCalls.Load() != callsAfterFailure {
 		t.Fatal("stale projection regenerated or checked an untrusted resource:", old)
+	}
+	scrapeToken := strings.Repeat("s", 32)
+	metricsRequest := httptest.NewRequest(http.MethodGet, observability.StudyMetricsPath, nil)
+	metricsRequest.Header.Set("Authorization", "Bearer "+scrapeToken)
+	metricsReply := httptest.NewRecorder()
+	metrics.Handler(scrapeToken).ServeHTTP(metricsReply, metricsRequest)
+	scraped := metricsReply.Body.String()
+	for _, line := range []string{
+		`recommendations_study_plan_duration_seconds_count{operation="generate",result="saved"} 1`,
+		`recommendations_study_plan_duration_seconds_count{operation="generate",result="replayed"} 1`,
+		`recommendations_study_plan_duration_seconds_count{operation="generate",result="fallback_unavailable"} 1`,
+		`recommendations_study_plan_duration_seconds_count{operation="generate",result="fallback_stale"} 1`,
+		`recommendations_study_candidate_checks_total{operation="generate",pool="available"} 1`,
+	} {
+		if metricsReply.Code != http.StatusOK || !strings.Contains(scraped, line+"\n") {
+			t.Fatal("missing plan decision metric:", line)
+		}
+	}
+	if strings.Contains(scraped, actor) || strings.Contains(scraped, goal) || strings.Contains(scraped, theory) {
+		t.Fatal("scrape exposes learner or resource identifiers")
 	}
 	request("PUT", "/steps/1/start", actor, progress, "", http.StatusServiceUnavailable)
 	entitiesDown.Store(false)

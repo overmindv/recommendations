@@ -17,6 +17,7 @@ import (
 	"github.com/overmindv/recommendations/internal/httpapi"
 	"github.com/overmindv/recommendations/internal/learnergoals"
 	"github.com/overmindv/recommendations/internal/mastery"
+	"github.com/overmindv/recommendations/internal/observability"
 	"github.com/overmindv/recommendations/internal/outbox"
 	catalogprojection "github.com/overmindv/recommendations/internal/projection/catalog"
 	"github.com/overmindv/recommendations/internal/projection/resources"
@@ -114,6 +115,11 @@ func run() int {
 		if cfg.ActivityTTL > 0 && app.Config().DatabaseURL == "" {
 			return errors.New("study activity requires DATABASE_URL")
 		}
+		var studyMetrics *observability.Study
+		if study := cfg.StudyPlans; study != nil && study.MetricsToken != "" {
+			studyMetrics = observability.NewStudy(app.Logger(), study.Ranking.Version, study.PolicySlot, study.AdaptationWindow > 0)
+			app.HTTP().Handle("GET "+observability.StudyMetricsPath, studyMetrics.Handler(study.MetricsToken))
+		}
 		if source != nil && app.Config().DatabaseURL == "" {
 			return errors.New("catalog projection requires DATABASE_URL")
 		}
@@ -190,19 +196,27 @@ func run() int {
 					evidenceStore = evidenceStore.WithCompletionChecks()
 				}
 				options := append([]kgo.Opt{kgo.SeedBrokers(parker.EnvList("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")...)}, cfg.Evidence.KafkaOptions...)
-				worker := consumer.NewWorker(evidenceStore, cfg.Evidence.ContentTopic, app.Logger(), options...)
+				worker := consumer.NewWorker(evidenceStore, cfg.Evidence.ContentTopic, app.Logger(), options...).WithMetrics(studyMetrics)
 				app.AddRunnable("learning-evidence", worker.Run)
 			}
 			if cfg.StudyPlans != nil {
 				planSource := resources.NewStudySource(verified, cfg.StudyPlans.Recent)
 				builder := studyplans.NewProjectedBuilder(pool, planSource, cfg.StudyPlans.Ranking, *cfg.Mastery).
-					WithProjectionFreshness(cfg.StudyPlans.ProjectionMaxAge)
+					WithProjectionFreshness(cfg.StudyPlans.ProjectionMaxAge).WithMetrics(studyMetrics)
 				studyStore := studyplans.NewPostgres(pool)
 				if goalProducer != nil {
 					studyStore = studyStore.WithCompletionChecks()
 				}
-				studyService = studyplans.NewService(studyStore, builder).WithLiveCatalog(planSource, cfg.StudyPlans.ProjectionMaxAge)
-				app.AddRunnable("study-plan-adaptation", studyplans.NewRebuildWorker(studyStore, builder, app.Logger()).Run)
+				if cfg.StudyPlans.AdaptationWindow == 0 {
+					studyStore = studyStore.WithManualRebuildsOnly()
+				}
+				service := studyplans.NewService(studyStore, builder).WithLiveCatalog(planSource, cfg.StudyPlans.ProjectionMaxAge).
+					WithMetrics(studyMetrics)
+				studyService = service
+				if studyMetrics != nil {
+					app.AddRunnable("study-catalog-metrics", service.WatchCatalog)
+				}
+				app.AddRunnable("study-plan-adaptation", studyplans.NewRebuildWorker(studyStore, builder, app.Logger()).WithMetrics(studyMetrics).Run)
 			}
 		}
 		httpapi.RegisterVerifiedAI(app.HTTP(), cfg.ServiceToken, engine, eligibility)
