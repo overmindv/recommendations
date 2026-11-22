@@ -29,8 +29,14 @@ func NewProjectedBuilder(pool *pgxpool.Pool, resources ResourceSource, rankingPo
 	return &ProjectedBuilder{pool: pool, resources: resources, ranking: rankingPolicy, evidence: evidencePolicy}
 }
 
+func (b *ProjectedBuilder) StudyAlternativeAvailable(ctx context.Context, key ranking.ResourceKey) bool {
+	owner, ok := b.resources.(studyAlternativeSource)
+
+	return ok && owner.StudyAlternativeAvailable(ctx, key)
+}
+
 func (b *ProjectedBuilder) Build(ctx context.Context, actor, goal string, source Sources) (Draft, error) {
-	input, now, watermark, err := b.inputs(ctx, actor, goal, source, b.ranking, b.evidence)
+	input, now, evidence, err := b.inputs(ctx, actor, goal, source, b.ranking, b.evidence)
 	if err != nil {
 		return Draft{}, err
 	}
@@ -39,11 +45,12 @@ func (b *ProjectedBuilder) Build(ctx context.Context, actor, goal string, source
 		return Draft{}, err
 	}
 
-	return Draft{Plan: plan, EvidenceWatermark: watermark, EvidencePolicy: b.evidence, ScopeTopics: slices.Sorted(maps.Keys(input.Topics))}, nil
+	return Draft{Plan: plan, EvidenceWatermark: evidence.Watermark, EvidencePolicy: b.evidence,
+		ScopeTopics: slices.Sorted(maps.Keys(input.Topics)), EvidenceTopics: evidence.Topics, EvidenceCaptured: now}, nil
 }
 
 func (b *ProjectedBuilder) inputs(ctx context.Context, actor, goal string, source Sources, rank ranking.Policy,
-	policy mastery.Policy) (planner.LearningRequest, time.Time, [32]byte, error) {
+	policy mastery.Policy) (planner.LearningRequest, time.Time, mastery.PlanningEvidence, error) {
 	var topics map[string]ranking.Topic
 	var ids []string
 	var evidence mastery.PlanningEvidence
@@ -62,7 +69,7 @@ func (b *ProjectedBuilder) inputs(ctx context.Context, actor, goal string, sourc
 		return err
 	})
 	if err != nil {
-		return planner.LearningRequest{}, time.Time{}, [32]byte{}, err
+		return planner.LearningRequest{}, time.Time{}, mastery.PlanningEvidence{}, err
 	}
 	for _, score := range evidence.Topics {
 		if score.ScoreBPS == nil {
@@ -74,11 +81,11 @@ func (b *ProjectedBuilder) inputs(ctx context.Context, actor, goal string, sourc
 	}
 	resources, err := b.resources.StudyResources(ctx, actor, goal, ids)
 	if err != nil {
-		return planner.LearningRequest{}, time.Time{}, [32]byte{}, err
+		return planner.LearningRequest{}, time.Time{}, mastery.PlanningEvidence{}, err
 	}
 
 	return planner.LearningRequest{
 		TargetTopicIDs: source.TargetTopics, Topics: topics, Resources: resources, AllowedLanguages: source.AllowedLanguages,
 		Budget: source.Budget, Ranking: rank,
-	}, now, evidence.Watermark, nil
+	}, now, evidence, nil
 }

@@ -3,12 +3,18 @@ package studyplans
 import (
 	"context"
 	"errors"
+
+	"github.com/overmindv/recommendations/internal/ranking"
 )
 
 var ErrUnavailable = errors.New("study plan sources unavailable")
 
 type DraftBuilder interface {
 	Build(context.Context, string, string, Sources) (Draft, error)
+}
+
+type studyAlternativeSource interface {
+	StudyAlternativeAvailable(context.Context, ranking.ResourceKey) bool
 }
 
 type Service struct {
@@ -55,6 +61,22 @@ func (s *Service) Generate(ctx context.Context, actor, goal string, input Genera
 
 func (s *Service) Current(ctx context.Context, actor, goal string) (View, error) {
 	return s.store.Current(ctx, actor, goal)
+}
+
+func (s *Service) Explain(ctx context.Context, actor, goal string, version int64) (Explanation, error) {
+	result, err := s.store.Explain(ctx, actor, goal, version)
+	if err != nil {
+		return Explanation{}, err
+	}
+	owner, ok := s.builder.(studyAlternativeSource)
+	for i := range result.Steps {
+		step := &result.Steps[i]
+		if step.Alternative != nil && (!ok || !owner.StudyAlternativeAvailable(ctx, step.Alternative.ResourceKey)) {
+			step.Alternative = nil
+		}
+	}
+
+	return result, nil
 }
 
 func (s *Service) CompleteActivity(ctx context.Context, actor, goal string, version int64, ordinal int) (View, error) {

@@ -22,7 +22,7 @@ type calendarDocument struct {
 	Suggestions    []planner.ScopeSuggestion `json:"suggestions"`
 }
 
-func saveDraft(ctx context.Context, tx pgx.Tx, goal string, version int64, source Sources, draft Draft) error {
+func saveDraft(ctx context.Context, tx pgx.Tx, goal string, version int64, source Sources, draft Draft, carried []int) error {
 	doc, rows, err := prepareDraft(goal, version, source, draft)
 	if err != nil {
 		return err
@@ -63,7 +63,7 @@ func saveDraft(ctx context.Context, tx pgx.Tx, goal string, version int64, sourc
 		return errors.New("incomplete study plan items insert")
 	}
 
-	return nil
+	return saveExplanations(ctx, tx, goal, version, draft, carried)
 }
 
 func prepareDraft(goal string, version int64, source Sources, draft Draft) (calendarDocument, [][]any, error) {
@@ -73,7 +73,7 @@ func prepareDraft(goal string, version int64, source Sources, draft Draft) (cale
 	if plan.Version != planner.LearningPlanVersion || plan.RankingAlgorithm != ranking.AlgorithmVersion ||
 		!plan.RankingPolicy.Valid() || !draft.EvidencePolicy.Valid() || draft.EvidenceWatermark == [32]byte{} || plan.Timezone != budget.Timezone ||
 		plan.WeeklyMinutes != maxMinutes || len(plan.Weeks) > planner.MaxLearningWeeks ||
-		len(plan.UnmetOutcomes) > ranking.MaxTopics || len(plan.Suggestions) > 2 {
+		len(plan.UnmetOutcomes) > ranking.MaxTopics || len(plan.Suggestions) > 2 || len(draft.EvidenceTopics) > ranking.MaxTopics {
 		return calendarDocument{}, nil, ErrInvalid
 	}
 	doc := calendarDocument{
