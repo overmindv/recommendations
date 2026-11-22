@@ -83,9 +83,15 @@ func (b *ProjectedBuilder) inputs(ctx context.Context, actor, goal string, sourc
 	if err != nil {
 		return planner.LearningRequest{}, time.Time{}, mastery.PlanningEvidence{}, err
 	}
-
-	return planner.LearningRequest{
+	input := planner.LearningRequest{
 		TargetTopicIDs: source.TargetTopics, Topics: topics, Resources: resources, AllowedLanguages: source.AllowedLanguages,
 		Budget: source.Budget, Ranking: rank,
-	}, now, evidence, nil
+	}
+	if source.feedbackRevision > 0 {
+		if err := applyResourceFeedback(ctx, b.pool, goal, ids, &input, now); err != nil {
+			return planner.LearningRequest{}, time.Time{}, mastery.PlanningEvidence{}, err
+		}
+	}
+
+	return input, now, evidence, nil
 }

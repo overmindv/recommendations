@@ -79,6 +79,10 @@ func (s *Service) Explain(ctx context.Context, actor, goal string, version int64
 	return result, nil
 }
 
+func (s *Service) SubmitFeedback(ctx context.Context, actor, goal string, input Feedback) (FeedbackReceipt, error) {
+	return s.store.SubmitFeedback(ctx, actor, goal, input)
+}
+
 func (s *Service) CompleteActivity(ctx context.Context, actor, goal string, version int64, ordinal int) (View, error) {
 	return s.store.CompleteActivity(ctx, actor, goal, version, ordinal)
 }

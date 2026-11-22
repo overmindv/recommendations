@@ -144,6 +144,31 @@ func TestPostgresPlanChangesCoalesceAcceptedEvidence(t *testing.T) {
 	if revision := readFactRevision(); revision != factRevision {
 		t.Fatal("unchanged evidence was rewritten:", revision, factRevision)
 	}
+	if _, err := pool.Exec(ctx, "UPDATE study_plan_rebuilds SET priority=true WHERE goal_id=$1", goal); err != nil {
+		t.Fatal(err)
+	}
+	_, priorityDue := assertRevision(4)
+	apply(outcomeFixture(ns, 30, 31, 3, 32))
+	_, nextDue := assertRevision(5)
+	if !priorityDue.Equal(nextDue) {
+		t.Fatal("new evidence delayed a rebuild requested by the learner")
+	}
+	if _, err := pool.Exec(ctx, "DELETE FROM study_plan_rebuilds WHERE goal_id=$1", goal); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, "INSERT INTO study_plan_feedback_state (goal_id,paused_at) VALUES ($1,now())", goal); err != nil {
+		t.Fatal(err)
+	}
+	whilePaused := outcomeFixture(ns, 33, 34, 3, 35)
+	apply(whilePaused)
+	var queued, recorded, used bool
+	if err := pool.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM study_plan_rebuilds WHERE goal_id=$1),
+		       EXISTS (SELECT 1 FROM learning_task_outcomes WHERE submission_id=$2),
+		       EXISTS (SELECT 1 FROM mastery_baselines WHERE goal_id=$1 AND $3::uuid=ANY(evidence_refs))`,
+		goal, whilePaused.Payload.SubmissionID, whilePaused.ID).Scan(&queued, &recorded, &used); err != nil || queued || !recorded || !used {
+		t.Fatal("paused goal dropped evidence or started a rebuild:", queued, recorded, used, err)
+	}
 }
 
 func BenchmarkPlanChangesBatch(b *testing.B) {

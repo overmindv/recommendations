@@ -313,6 +313,59 @@ paths:
           $ref: '#/components/responses/StudyPlan'
         default:
           $ref: '#/components/responses/Error'
+  /v1/learner/goals/{id}/study-plan/feedback:
+    parameters:
+      - $ref: '#/components/parameters/Actor'
+      - $ref: '#/components/parameters/StudyPlanGoal'
+    post:
+      operationId: submitStudyPlanFeedback
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: Goal-scoped UUID. An exact replay returns the original receipt.
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [plan_version, action]
+              properties:
+                plan_version:
+                  type: integer
+                  format: int64
+                  minimum: 1
+                  maximum: 1024
+                action:
+                  enum: [too_easy, too_hard, not_relevant, skip, pause, resume, set_budget]
+                ordinal:
+                  type: integer
+                  minimum: 1
+                  maximum: 128
+                  description: Required for too_easy, too_hard, not_relevant and skip; otherwise omit.
+                weekly_minutes:
+                  type: integer
+                  minimum: 1
+                  maximum: 10080
+                  description: Required for set_budget; otherwise omit.
+      responses:
+        '202':
+          description: Feedback recorded. Read the current plan to see pause state or recalculation.
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudyFeedbackReceipt'
+        default:
+          $ref: '#/components/responses/Error'
   /v1/learner/goals/{id}/study-plan/explanation:
     parameters:
       - $ref: '#/components/parameters/Actor'
@@ -504,7 +557,7 @@ components:
     Error:
       description: >
         400 INVALID_ARGUMENT, 403 PERMISSION_DENIED, 404 NOT_FOUND, 409 PROFILE_REQUIRED,
-        VERSION_CONFLICT, IDEMPOTENCY_CONFLICT, GOAL_LIMIT, STEP_BLOCKED, GRADE_PENDING or PLAN_LIMIT, 413 body too large,
+        VERSION_CONFLICT, IDEMPOTENCY_CONFLICT, GOAL_LIMIT, STEP_BLOCKED, GRADE_PENDING, BUDGET_EXCEEDED or PLAN_LIMIT, 413 body too large,
         415 unsupported media type, 422 UNKNOWN_TOPIC, UNKNOWN_TEMPLATE or INFEASIBLE_GOAL,
         429 WRITE_LIMIT, or 503 SERVICE_UNAVAILABLE.
       content:
@@ -518,6 +571,31 @@ components:
               message:
                 type: string
   schemas:
+    StudyFeedbackReceipt:
+      type: object
+      required: [request_id, plan_version, action, accepted_at]
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        plan_version:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 1024
+        action:
+          enum: [too_easy, too_hard, not_relevant, skip, pause, resume, set_budget]
+        ordinal:
+          type: integer
+          minimum: 1
+          maximum: 128
+        weekly_minutes:
+          type: integer
+          minimum: 1
+          maximum: 10080
+        accepted_at:
+          type: string
+          format: date-time
     StudyPlanExplanation:
       type: object
       required: [plan_version, stale, steps, limits]
@@ -709,12 +787,15 @@ components:
           type: boolean
         stale:
           type: boolean
+        paused_at:
+          type: string
+          format: date-time
         next_step:
           type: [integer, 'null']
           minimum: 1
           maximum: 128
         blocked_reason:
-          enum: [stale_plan, check_failed, unverified_prerequisite]
+          enum: [stale_plan, check_failed, unverified_prerequisite, paused, replanning]
         goal_demonstrated:
           type: boolean
     StudyWeek:
@@ -781,6 +862,8 @@ components:
         superseded:
           type: boolean
           description: A failed checkpoint carried over for history without blocking the new route.
+        skipped:
+          type: boolean
         assessment:
           type: object
           required: [verdict, graded_at]

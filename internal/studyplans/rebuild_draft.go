@@ -15,12 +15,13 @@ func (b *ProjectedBuilder) Rebuild(ctx context.Context, base RebuildBase) (*Draf
 		return nil, err
 	}
 	keep, observed := continuation(before)
+	keep.Rebudget = base.Source.approvedBudgetChange(before)
 	plan, err := planner.ContinueLearningPlan(ctx, now, input, keep)
 	if err != nil {
 		return nil, err
 	}
 	scope := slices.Sorted(maps.Keys(input.Topics))
-	if !observed && (len(before.scopeTopics) == 0 || slices.Equal(before.scopeTopics, scope)) && sameSchedule(before, plan) {
+	if !observed && !keep.Rebudget && (len(before.scopeTopics) == 0 || slices.Equal(before.scopeTopics, scope)) && sameSchedule(before, plan) {
 		return nil, nil
 	}
 
@@ -36,6 +37,9 @@ func continuation(view View) (planner.LearningContinuation, bool) {
 	for i, week := range view.Weeks {
 		keep.Weeks[i].StudyWeek = week.StudyWeek
 		for _, row := range week.Items {
+			if row.Skipped {
+				continue
+			}
 			if row.ActivityStarted == nil && row.ActivityDone == nil && !row.hasReceipt && !row.observedGrade {
 				continue
 			}
@@ -68,7 +72,7 @@ func sameSchedule(view View, next planner.LearningPlan) bool {
 		other := next.Weeks[i]
 		if week.From != other.From || week.Through != other.Through ||
 			!slices.EqualFunc(week.Items, other.Items, func(a Item, b planner.StudyItem) bool {
-				return a.ResourceKey == b.ResourceKey && a.TopicID == b.TopicID && a.Stage == b.Stage &&
+				return !a.Skipped && a.ResourceKey == b.ResourceKey && a.TopicID == b.TopicID && a.Stage == b.Stage &&
 					a.Minutes == b.Minutes && a.Superseded == b.Superseded && slices.Equal(a.RequiresCheck, b.RequiresCheck)
 			}) {
 			return false

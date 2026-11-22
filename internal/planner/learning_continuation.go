@@ -1,6 +1,6 @@
 package planner
 
-func (a *studyAllocator) preserve(fresh StudyCalendar, weeks []LearningWeek) error {
+func (a *studyAllocator) preserve(fresh StudyCalendar, weeks []LearningWeek, rebudget bool) error {
 	if len(weeks) > MaxLearningWeeks {
 		return ErrInvalidInput
 	}
@@ -10,7 +10,7 @@ func (a *studyAllocator) preserve(fresh StudyCalendar, weeks []LearningWeek) err
 	current := 0
 	for i, week := range weeks {
 		if week.From <= previous || week.Through < week.From ||
-			week.CapacityMinutes < 0 || week.CapacityMinutes > fresh.WeeklyMinutes {
+			week.CapacityMinutes < 0 || week.CapacityMinutes > maxStudyWeekMinutes {
 			return ErrInvalidInput
 		}
 		previous = week.Through
@@ -19,7 +19,10 @@ func (a *studyAllocator) preserve(fresh StudyCalendar, weeks []LearningWeek) err
 		}
 		capacity := 0
 		if current < len(fresh.Weeks) && fresh.Weeks[current].Through == week.Through {
-			capacity = min(week.CapacityMinutes, fresh.Weeks[current].CapacityMinutes)
+			capacity = fresh.Weeks[current].CapacityMinutes
+			if !rebudget {
+				capacity = min(week.CapacityMinutes, capacity)
+			}
 		}
 		a.weeks[i] = LearningWeek{StudyWeek: week.StudyWeek, Items: []StudyItem{}}
 		for _, item := range week.Items {

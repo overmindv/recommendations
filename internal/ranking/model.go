@@ -53,6 +53,7 @@ type Request struct {
 	AllowedLanguages []string
 	BudgetMinutes    int
 	PreviousKind     Kind
+	DifficultyShift  int
 	Limit            int
 }
 
