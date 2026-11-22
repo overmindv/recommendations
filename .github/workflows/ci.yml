@@ -27,3 +27,9 @@ jobs:
       - run: go run ./cmd/recommendations migrate --dir migrations --dsn "$STUDY_ACTIVITY_TEST_DSN" up && make activity-ctest
         env:
           STUDY_ACTIVITY_TEST_DSN: postgres://postgres:postgres@localhost:5432/activity_test?sslmode=disable
+      - run: go test -race -count=1 ./internal/replay
+        env:
+          REPLAY_TEST_DSN: postgres://postgres:postgres@localhost:5432/activity_test?sslmode=disable
+      - run: make evidence-ctest
+        env:
+          LEARNING_EVIDENCE_TEST_DSN: postgres://postgres:postgres@localhost:5432/activity_test?sslmode=disable

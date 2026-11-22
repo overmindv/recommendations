@@ -69,6 +69,59 @@ func TestPostgresEvidenceRollback(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // Меняет глобальный maintenance lease в выделенной fixture БД.
+func TestPostgresEvidenceMaintenanceFence(t *testing.T) {
+	pool := evidenceDB(t)
+	ctx := t.Context()
+	store := NewPostgres(pool)
+	wire := outcomeFixture(namespace(t), 1, 2, 3, 4)
+	msg := decodeMessage(evidenceRecord(t, TasksTopic, wire.AggregateID, time.Now().UnixNano(), wire), activity.DefaultLearningTopic)
+	if _, err := pool.Exec(ctx, `UPDATE evidence_replay_clock SET paused_until=clock_timestamp()+interval '1 minute' WHERE singleton`); err != nil {
+		t.Fatal(err)
+	}
+	err := store.apply(ctx, []message{msg})
+	if _, resetErr := pool.Exec(ctx, `UPDATE evidence_replay_clock SET paused_until=NULL WHERE singleton`); resetErr != nil {
+		t.Fatal(resetErr)
+	}
+	if err == nil {
+		t.Fatal("ingestion ignored maintenance fence")
+	}
+	var count int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM learning_evidence_inbox WHERE event_id=$1`, msg.id).Scan(&count); err != nil || count != 0 {
+		t.Fatal("paused event committed", count, err)
+	}
+	if err = store.apply(ctx, []message{msg}); err != nil {
+		t.Fatal("resume lost event", err)
+	}
+}
+
+func TestPostgresLegacyInboxDoesNotInventCorrectionProof(t *testing.T) {
+	t.Parallel()
+	pool := evidenceDB(t)
+	ctx := t.Context()
+	store := NewPostgres(pool)
+	ns := namespace(t)
+	first := outcomeFixture(ns, 1, 2, 3, 4)
+	latest := first
+	latest.ID = fixtureID(ns, 5)
+	latest.Version = 2
+	latest.Payload.Correction = 2
+	old := decodeMessage(evidenceRecord(t, TasksTopic, first.AggregateID, time.Now().UnixNano(), first), activity.DefaultLearningTopic)
+	if err := store.apply(ctx, []message{decodeMessage(evidenceRecord(t, TasksTopic, latest.AggregateID, time.Now().UnixNano(), latest), activity.DefaultLearningTopic)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO learning_evidence_inbox(source,event_id,fingerprint,rejected)VALUES('tasks',$1,$2,NULL)`, old.id, old.fingerprint[:]); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.apply(ctx, []message{old}); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM learning_outcome_history WHERE submission_id=$1`, first.Payload.SubmissionID).Scan(&count); err != nil || count != 1 {
+		t.Fatal("unknown legacy decision became a proof", count, err)
+	}
+}
+
 func TestPostgresEvidenceCorrectionAndWeightCap(t *testing.T) {
 	t.Parallel()
 
@@ -123,6 +176,12 @@ func TestPostgresEvidenceCorrectionAndWeightCap(t *testing.T) {
 	}
 	if version != 2 || eventID != corrected.ID || verdict != verdictWrong {
 		t.Fatal("projection lost the latest valid correction:", version, eventID, verdict)
+	}
+	if err := store.apply(ctx, []message{taskMessage(wrongOwner, 100)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM learning_outcome_history WHERE submission_id=$1`, first.Payload.SubmissionID).Scan(&count); err != nil || count != 2 {
+		t.Fatal("old correction missing or rejected evidence archived", count, err)
 	}
 	if err := pool.QueryRow(ctx, `
 		SELECT sum(evidence_weight),min(submission_id::text) FROM learning_independent_task_evidence WHERE learner_id=$1`,
