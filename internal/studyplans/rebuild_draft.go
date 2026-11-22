@@ -5,6 +5,7 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/overmindv/recommendations/internal/observability"
 	"github.com/overmindv/recommendations/internal/planner"
 )
 
@@ -13,6 +14,9 @@ func (b *ProjectedBuilder) Rebuild(ctx context.Context, base RebuildBase) (*Draf
 	input, now, evidence, err := b.inputs(ctx, base.Source.actor, before.GoalID, base.Source, before.RankingPolicy, before.EvidencePolicy)
 	if err != nil {
 		return nil, err
+	}
+	if b.metrics != nil {
+		b.metrics.Candidates(observability.Rebuild, len(input.Resources) > 0)
 	}
 	keep, observed := continuation(before)
 	keep.Rebudget = base.Source.approvedBudgetChange(before)

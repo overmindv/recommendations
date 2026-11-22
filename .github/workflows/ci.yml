@@ -30,6 +30,9 @@ jobs:
       - run: go test -race -count=1 ./internal/replay
         env:
           REPLAY_TEST_DSN: postgres://postgres:postgres@localhost:5432/activity_test?sslmode=disable
+      - run: go test -race -count=1 ./internal/studyplans
+        env:
+          STUDY_PLANS_TEST_DSN: postgres://postgres:postgres@localhost:5432/activity_test?sslmode=disable
       - run: make evidence-ctest
         env:
           LEARNING_EVIDENCE_TEST_DSN: postgres://postgres:postgres@localhost:5432/activity_test?sslmode=disable

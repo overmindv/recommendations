@@ -2,12 +2,15 @@ package consumer
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/overmindv/content/pkg/api/activity"
+	"github.com/overmindv/recommendations/internal/observability"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -39,7 +42,23 @@ func TestKafkaEvidenceCommit(t *testing.T) {
 	if produceErr := producer.ProduceSync(ctx, records...).FirstErr(); produceErr != nil {
 		t.Fatal(produceErr)
 	}
-	worker := NewWorker(NewPostgres(pool), activity.DefaultLearningTopic, quietLog(), options)
+	metrics := observability.NewStudy(nil, "test", "current", false)
+	worker := NewWorker(NewPostgres(pool), activity.DefaultLearningTopic, quietLog(), options).WithMetrics(metrics)
+	scrapeToken := strings.Repeat("s", 32)
+	scrape := metrics.Handler(scrapeToken)
+	observed := func() bool {
+		r := httptest.NewRequest(http.MethodGet, observability.StudyMetricsPath, nil)
+		r.Header.Set("Authorization", "Bearer "+scrapeToken)
+		w := httptest.NewRecorder()
+		scrape.ServeHTTP(w, r)
+		body := w.Body.String()
+
+		return w.Code == http.StatusOK &&
+			strings.Contains(body, `recommendations_learning_evidence_committed_total{source="tasks"} 3`+"\n") &&
+			strings.Contains(body, `recommendations_learning_evidence_lag_seconds_count{source="tasks"} 3`+"\n") &&
+			strings.Contains(body, `recommendations_learning_evidence_committed_total{source="content"} 1`+"\n") &&
+			strings.Contains(body, `recommendations_learning_evidence_lag_seconds_count{source="content"} 1`+"\n")
+	}
 	client, err := kgo.NewClient(worker.opts...)
 	if err != nil {
 		t.Fatal(err)
@@ -65,13 +84,13 @@ func TestKafkaEvidenceCommit(t *testing.T) {
 				break
 			}
 		}
-		if committed {
+		if committed && observed() {
 			break
 		}
 		select {
 		case <-ticker.C:
 		case <-ctx.Done():
-			t.Fatal("learning evidence offsets not committed:", ctx.Err())
+			t.Fatal("learning evidence commit or metrics missing:", ctx.Err())
 		}
 	}
 	var outcomes, reads, rejected int
