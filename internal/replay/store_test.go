@@ -105,7 +105,7 @@ func TestReplayInterruptedAndShuffledParity(t *testing.T) {
 		if err != nil || status.Through != 1 {
 			t.Fatal("cursor", status, err)
 		}
-		if err = store.Activate(ctx, id, nil); err == nil {
+		if err = store.Activate(ctx, id, ActivationOptions{}); err == nil {
 			t.Fatal("partial activation")
 		}
 		// Новый процесс продолжает durable cursor; чтение до activation остаётся старым.
@@ -115,7 +115,7 @@ func TestReplayInterruptedAndShuffledParity(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if err = store.Activate(ctx, id, nil); err != nil {
+		if err = store.Activate(ctx, id, ActivationOptions{}); err != nil {
 			t.Fatal(err)
 		}
 		var raw []byte
@@ -169,7 +169,7 @@ func TestReplayRejectsChangedEpochHashAndExpiredLease(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err = store.Activate(ctx, id, nil); err == nil {
+		if err = store.Activate(ctx, id, ActivationOptions{}); err == nil {
 			t.Fatal("invalid activation", scenario)
 		}
 		if err = store.Cancel(ctx, id); err != nil {

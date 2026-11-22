@@ -9,6 +9,7 @@ import (
 
 	"github.com/overmindv/parker"
 	"github.com/overmindv/recommendations/internal/aiplan"
+	"github.com/overmindv/recommendations/internal/completion"
 	"github.com/overmindv/recommendations/internal/config"
 	"github.com/overmindv/recommendations/internal/consumer"
 	"github.com/overmindv/recommendations/internal/diagnostic"
@@ -16,12 +17,14 @@ import (
 	"github.com/overmindv/recommendations/internal/httpapi"
 	"github.com/overmindv/recommendations/internal/learnergoals"
 	"github.com/overmindv/recommendations/internal/mastery"
+	"github.com/overmindv/recommendations/internal/outbox"
 	catalogprojection "github.com/overmindv/recommendations/internal/projection/catalog"
 	"github.com/overmindv/recommendations/internal/projection/resources"
 	"github.com/overmindv/recommendations/internal/savedplans"
 	"github.com/overmindv/recommendations/internal/studyactivity"
 	"github.com/overmindv/recommendations/internal/studyplans"
 	"github.com/overmindv/recommendations/internal/topiccatalog"
+	"github.com/overmindv/recommendations/pkg/api/goalcompletion"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -82,6 +85,21 @@ func run() int {
 		}
 		defer materialLog.Close()
 	}
+	var goalProducer *kgo.Client
+	if cfg.StudyPlans != nil && cfg.StudyPlans.CompletionEvents {
+		options := append([]kgo.Opt{
+			kgo.SeedBrokers(parker.EnvList("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")...),
+			kgo.DefaultProduceTopic(goalcompletion.Topic), kgo.RequiredAcks(kgo.AllISRAcks()),
+			kgo.RecordDeliveryTimeout(8 * time.Second),
+		}, cfg.Evidence.KafkaOptions...)
+		goalProducer, err = kgo.NewClient(options...)
+		if err != nil {
+			slog.Error("invalid goal completion producer configuration")
+
+			return 1
+		}
+		defer goalProducer.Close()
+	}
 
 	return parker.Main(func(app *parker.App) error {
 		var store goals.Store
@@ -119,6 +137,11 @@ func run() int {
 
 				return catalog.Validate(ctx, input.TargetTopics)
 			})
+			if goalProducer != nil {
+				learnerStore = learnerStore.WithCompletionChecks()
+				app.AddRunnable("goal-completion-checks", completion.NewWorker(pool, app.Logger()).Run)
+				app.AddRunnable("goal-completion-outbox", outbox.NewGoalPublisher(pool, goalProducer, app.Logger()).Run)
+			}
 			onboarding = learnerStore
 			var diagnosticCatalog diagnostic.Catalog
 			var verified *resources.Eligibility
@@ -163,6 +186,9 @@ func run() int {
 						return err
 					}
 				}
+				if goalProducer != nil {
+					evidenceStore = evidenceStore.WithCompletionChecks()
+				}
 				options := append([]kgo.Opt{kgo.SeedBrokers(parker.EnvList("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")...)}, cfg.Evidence.KafkaOptions...)
 				worker := consumer.NewWorker(evidenceStore, cfg.Evidence.ContentTopic, app.Logger(), options...)
 				app.AddRunnable("learning-evidence", worker.Run)
@@ -171,6 +197,9 @@ func run() int {
 				planSource := resources.NewStudySource(verified, cfg.StudyPlans.Recent)
 				builder := studyplans.NewProjectedBuilder(pool, planSource, cfg.StudyPlans.Ranking, *cfg.Mastery)
 				studyStore := studyplans.NewPostgres(pool)
+				if goalProducer != nil {
+					studyStore = studyStore.WithCompletionChecks()
+				}
 				studyService = studyplans.NewService(studyStore, builder)
 				app.AddRunnable("study-plan-adaptation", studyplans.NewRebuildWorker(studyStore, builder, app.Logger()).Run)
 			}

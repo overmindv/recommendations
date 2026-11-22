@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	completionqueue "github.com/overmindv/recommendations/internal/completion/queue"
 	"github.com/overmindv/recommendations/internal/mastery"
 )
 
@@ -16,12 +17,19 @@ const batchLimit = 32
 const outcomeConflict = "outcome_conflict"
 
 type Postgres struct {
-	pool         *pgxpool.Pool
-	rebuildDelay time.Duration
-	baselines    *mastery.Postgres
+	pool             *pgxpool.Pool
+	rebuildDelay     time.Duration
+	baselines        *mastery.Postgres
+	completionChecks bool
 }
 
 func NewPostgres(pool *pgxpool.Pool) *Postgres { return &Postgres{pool: pool} }
+
+func (p Postgres) WithCompletionChecks() *Postgres {
+	p.completionChecks = true
+
+	return &p
+}
 
 func NewPostgresWithPlanChanges(pool *pgxpool.Pool, delay time.Duration, baselines *mastery.Postgres) (*Postgres, error) {
 	if delay < time.Second || delay > 5*time.Minute || baselines == nil {
@@ -91,7 +99,7 @@ func (p *Postgres) apply(ctx context.Context, messages []message) error {
 		if _, err := tx.Exec(ctx, `UPDATE evidence_replay_clock SET live_revision=live_revision+1 WHERE singleton`); err != nil {
 			return err
 		}
-		checks, submissions, err := applyBatch(ctx, tx, messages, p.rebuildDelay > 0)
+		checks, changes, err := applyBatch(ctx, tx, messages, p.rebuildDelay > 0 || p.completionChecks)
 		if err != nil {
 			return fmt.Errorf("write evidence batch: %w", err)
 		}
@@ -102,14 +110,28 @@ func (p *Postgres) apply(ctx context.Context, messages []message) error {
 		}
 		for _, msg := range messages {
 			if msg.outcome != nil && msg.reject == "" {
-				if err := archiveOutcome(ctx, tx, msg); err != nil {
-					return err
+				if archiveErr := archiveOutcome(ctx, tx, msg); archiveErr != nil {
+					return archiveErr
 				}
 			}
 		}
-		if len(submissions) != 0 {
+		if p.rebuildDelay > 0 && len(changes) != 0 {
+			submissions := make([]string, 0, len(changes))
+			for _, change := range changes {
+				submissions = append(submissions, change.submission)
+			}
 			if rebuildErr := updateLearningPlans(ctx, tx, submissions, p.rebuildDelay, p.baselines); rebuildErr != nil {
 				return fmt.Errorf("apply evidence to study plans: %w", rebuildErr)
+			}
+		}
+
+		if p.completionChecks && len(changes) != 0 {
+			learners := make([]string, 0, len(changes))
+			for _, change := range changes {
+				learners = append(learners, change.learner)
+			}
+			if scheduleErr := completionqueue.Request(ctx, tx, learners); scheduleErr != nil {
+				return fmt.Errorf("schedule goal completion checks: %w", scheduleErr)
 			}
 		}
 
@@ -122,7 +144,12 @@ type replayCheck struct {
 	duplicate bool
 }
 
-func applyBatch(ctx context.Context, tx pgx.Tx, messages []message, collect bool) ([]replayCheck, []string, error) {
+type outcomeChange struct {
+	submission string
+	learner    string
+}
+
+func applyBatch(ctx context.Context, tx pgx.Tx, messages []message, collect bool) ([]replayCheck, []outcomeChange, error) {
 	batch := &pgx.Batch{}
 	for _, msg := range messages {
 		switch {
@@ -140,7 +167,7 @@ func applyBatch(ctx context.Context, tx pgx.Tx, messages []message, collect bool
 	results := tx.SendBatch(ctx, batch)
 	defer func() { _ = results.Close() }()
 	var checks []replayCheck
-	var submissions []string
+	var changes []outcomeChange
 	for _, msg := range messages {
 		if msg.reject != "" {
 			if _, err := results.Exec(); err != nil {
@@ -157,11 +184,11 @@ func applyBatch(ctx context.Context, tx pgx.Tx, messages []message, collect bool
 			checks = append(checks, replayCheck{msg, !inserted})
 		}
 		if collect && applied && msg.outcome != nil && (msg.outcome.kind() == independentEvidence || msg.outcome.Correction > 1) {
-			submissions = append(submissions, msg.outcome.SubmissionID)
+			changes = append(changes, outcomeChange{msg.outcome.SubmissionID, msg.outcome.LearnerID})
 		}
 	}
 
-	return checks, submissions, results.Close()
+	return checks, changes, results.Close()
 }
 
 func (c replayCheck) verify(ctx context.Context, tx pgx.Tx) error {

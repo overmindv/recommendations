@@ -13,9 +13,10 @@ import (
 )
 
 type Postgres struct {
-	pool     *pgxpool.Pool
-	now      func() time.Time
-	validate GoalValidator
+	pool             *pgxpool.Pool
+	now              func() time.Time
+	validate         GoalValidator
+	completionChecks bool
 }
 
 type GoalValidator func(context.Context, Input) error
@@ -31,6 +32,12 @@ func NewValidatedPostgres(pool *pgxpool.Pool, validate GoalValidator) *Postgres 
 	store.validate = validate
 
 	return store
+}
+
+func (p Postgres) WithCompletionChecks() *Postgres {
+	p.completionChecks = true
+
+	return &p
 }
 
 func (p *Postgres) validateGoal(in Input) func(context.Context) error {

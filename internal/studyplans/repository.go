@@ -9,16 +9,24 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	completionqueue "github.com/overmindv/recommendations/internal/completion/queue"
 	"github.com/overmindv/recommendations/internal/learnergoals"
 	"github.com/overmindv/recommendations/internal/planner"
 )
 
 type Postgres struct {
-	pool *pgxpool.Pool
+	pool             *pgxpool.Pool
+	completionChecks bool
 }
 
 func NewPostgres(pool *pgxpool.Pool) *Postgres {
 	return &Postgres{pool: pool}
+}
+
+func (p Postgres) WithCompletionChecks() *Postgres {
+	p.completionChecks = true
+
+	return &p
 }
 
 var readOnly = pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}
@@ -94,6 +102,11 @@ func (p *Postgres) Save(ctx context.Context, actor, goal string, input Generatio
 			return requestErr
 		}
 		current.PlanVersion = version
+		if p.completionChecks {
+			if scheduleErr := completionqueue.Request(ctx, tx, []string{actor}); scheduleErr != nil {
+				return scheduleErr
+			}
+		}
 		saved, err = readView(ctx, tx, goal, version, current)
 
 		return err
