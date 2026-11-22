@@ -13,6 +13,7 @@ import (
 )
 
 const batchLimit = 32
+const outcomeConflict = "outcome_conflict"
 
 type Postgres struct {
 	pool         *pgxpool.Pool
@@ -80,6 +81,16 @@ func (p *Postgres) apply(ctx context.Context, messages []message) error {
 	}
 
 	return pgx.BeginFunc(ctx, p.pool, func(tx pgx.Tx) error {
+		var paused bool
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(paused_until>clock_timestamp(),false) FROM evidence_replay_clock WHERE singleton FOR UPDATE`).Scan(&paused); err != nil {
+			return err
+		}
+		if paused {
+			return errors.New("evidence ingestion paused for replay")
+		}
+		if _, err := tx.Exec(ctx, `UPDATE evidence_replay_clock SET live_revision=live_revision+1 WHERE singleton`); err != nil {
+			return err
+		}
 		checks, submissions, err := applyBatch(ctx, tx, messages, p.rebuildDelay > 0)
 		if err != nil {
 			return fmt.Errorf("write evidence batch: %w", err)
@@ -87,6 +98,13 @@ func (p *Postgres) apply(ctx context.Context, messages []message) error {
 		for _, check := range checks {
 			if err := check.verify(ctx, tx); err != nil {
 				return fmt.Errorf("check evidence replay: %w", err)
+			}
+		}
+		for _, msg := range messages {
+			if msg.outcome != nil && msg.reject == "" {
+				if err := archiveOutcome(ctx, tx, msg); err != nil {
+					return err
+				}
 			}
 		}
 		if len(submissions) != 0 {
@@ -151,12 +169,15 @@ func (c replayCheck) verify(ctx context.Context, tx pgx.Tx) error {
 	reason := ""
 	if c.duplicate {
 		var digest []byte
-		const query = `SELECT fingerprint FROM learning_evidence_inbox WHERE source=$1 AND event_id=$2`
-		if err := tx.QueryRow(ctx, query, msg.source, msg.id).Scan(&digest); err != nil {
+		var rejected *bool
+		const query = `SELECT fingerprint,rejected FROM learning_evidence_inbox WHERE source=$1 AND event_id=$2`
+		if err := tx.QueryRow(ctx, query, msg.source, msg.id).Scan(&digest, &rejected); err != nil {
 			return err
 		}
 		if !bytes.Equal(digest, msg.fingerprint[:]) {
 			reason = "event_id_conflict"
+		} else if rejected != nil && *rejected {
+			reason = outcomeConflict
 		}
 	} else {
 		p := msg.outcome
@@ -170,10 +191,15 @@ func (c replayCheck) verify(ctx context.Context, tx pgx.Tx) error {
 			return err
 		}
 		if !consistent {
-			reason = "outcome_conflict"
+			reason = outcomeConflict
 		}
 	}
 	if reason != "" {
+		if !c.duplicate {
+			if _, err := tx.Exec(ctx, `UPDATE learning_evidence_inbox SET rejected=true WHERE source=$1 AND event_id=$2`, msg.source, msg.id); err != nil {
+				return err
+			}
+		}
 		_, err := tx.Exec(ctx, rejectSQL, msg.topic, msg.partition, msg.offset, reason)
 
 		return err
