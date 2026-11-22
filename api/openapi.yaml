@@ -7,6 +7,48 @@ servers:
 security:
   - gatewayToken: []
 paths:
+  /v1/learner/study-activity:
+    parameters:
+      - $ref: '#/components/parameters/Actor'
+    post:
+      operationId: captureStudyActivity
+      description: Самоотчёт об активности; не подтверждает знания. Включается только с явным TTL.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [client_event_id, session_id, resource_kind, resource_id, resource_revision_id, kind, occurred_at]
+              properties:
+                client_event_id: {type: string, format: uuid}
+                session_id: {type: string, format: uuid}
+                resource_kind: {type: string, enum: [tasks, content]}
+                resource_id: {type: string, format: uuid}
+                resource_revision_id: {type: string, format: uuid}
+                kind: {type: string, enum: [view, start, heartbeat, finish]}
+                occurred_at: {type: string, format: date-time}
+                duration_seconds: {type: integer, minimum: 0, default: 0}
+                visible: {type: boolean, default: false}
+                active: {type: boolean, default: false}
+      responses:
+        '200':
+          description: Первый результат события; повтор не добавляет время и не продлевает TTL.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [client_event_id, accepted_seconds, trust, expires_at]
+                properties:
+                  client_event_id: {type: string, format: uuid}
+                  accepted_seconds: {type: integer, minimum: 0, maximum: 30}
+                  trust: {type: string, const: self_reported}
+                  expires_at: {type: string, format: date-time}
+        '429':
+          description: Минимум 5 секунд между событиями actor, максимум 600 в календарный час UTC.
+        default:
+          $ref: '#/components/responses/Error'
   /v1/learner/goal-templates:
     parameters:
       - $ref: '#/components/parameters/Actor'
