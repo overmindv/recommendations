@@ -58,7 +58,9 @@ func run() error {
 		if loadErr != nil {
 			return loadErr
 		}
-		err = store.Activate(ctx, id, cfg.Mastery)
+		err = store.Activate(ctx, id, replay.ActivationOptions{
+			Mastery: cfg.Mastery, CompletionChecks: cfg.StudyPlans != nil && cfg.StudyPlans.CompletionEvents,
+		})
 	case "cancel":
 		err = store.Cancel(ctx, id)
 	case "status":

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 
 	"github.com/jackc/pgx/v5"
+	completionqueue "github.com/overmindv/recommendations/internal/completion/queue"
 	"github.com/overmindv/recommendations/internal/mastery"
 )
 
@@ -13,7 +14,12 @@ func sameManifest(a, b Manifest) bool {
 	return a.Watermark == b.Watermark && a.PrivacyEpoch == b.PrivacyEpoch && a.Count == b.Count && a.SHA256 == b.SHA256 && a.LegacyMissing == b.LegacyMissing && a.CompleteSince.Equal(b.CompleteSince)
 }
 
-func (s *Store) Activate(ctx context.Context, id string, policy *mastery.Policy) error {
+type ActivationOptions struct {
+	Mastery          *mastery.Policy
+	CompletionChecks bool
+}
+
+func (s *Store) Activate(ctx context.Context, id string, options ActivationOptions) error {
 	status, err := s.Status(ctx, id)
 	if err != nil {
 		return err
@@ -33,8 +39,8 @@ func (s *Store) Activate(ctx context.Context, id string, policy *mastery.Policy)
 		return ErrSnapshot
 	}
 	var baselines *mastery.Postgres
-	if policy != nil {
-		baselines, err = mastery.NewPostgres(ctx, s.pool, *policy)
+	if options.Mastery != nil {
+		baselines, err = mastery.NewPostgres(ctx, s.pool, *options.Mastery)
 		if err != nil {
 			return err
 		}
@@ -112,8 +118,13 @@ func (s *Store) Activate(ctx context.Context, id string, policy *mastery.Policy)
 			}
 		}
 		if _, err = tx.Exec(ctx, `INSERT INTO study_plan_rebuilds AS q(goal_id,first_requested_at,requested_at,available_at)
- SELECT goal_id,statement_timestamp(),statement_timestamp(),statement_timestamp() FROM study_plan_heads WHERE goal_id=ANY($1::uuid[]) ORDER BY goal_id
+ SELECT h.goal_id,statement_timestamp(),statement_timestamp(),statement_timestamp() FROM study_plan_heads h
+ LEFT JOIN study_plan_feedback_state f ON f.goal_id=h.goal_id
+ WHERE h.goal_id=ANY($1::uuid[]) AND f.paused_at IS NULL ORDER BY h.goal_id
  ON CONFLICT(goal_id) DO UPDATE SET revision=q.revision+1,requested_at=EXCLUDED.requested_at,available_at=EXCLUDED.available_at`, goals); err != nil {
+			return err
+		}
+		if err = completionqueue.RequestReplay(ctx, tx, goals, options.CompletionChecks); err != nil {
 			return err
 		}
 		if _, err = tx.Exec(ctx, `UPDATE evidence_replay_versions SET state='superseded' WHERE state='active'`); err != nil {
