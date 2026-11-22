@@ -1,0 +1,130 @@
+{
+  "schema_version": 1,
+  "catalog_at": "2026-10-01T00:00:00Z",
+  "holdout_from": "2026-10-12T09:00:00Z",
+  "recent_hours": 24,
+  "ranking": {
+    "policy_version": "algorithm-fixtures-v1",
+    "target_bps": 8000,
+    "unknown_gap_bps": 5000,
+    "prerequisite_min_bps": 7500,
+    "medium_difficulty_bps": 5000,
+    "hard_difficulty_bps": 9000,
+    "weights": {"gap": 4, "difficulty": 6, "duration": 1, "variety": 2, "due_review": 0}
+  },
+  "topics": [
+    {"id": "arrays", "prerequisites": []},
+    {"id": "binary-search", "prerequisites": ["arrays"]},
+    {"id": "time-complexity", "prerequisites": []},
+    {"id": "binary-boundaries", "prerequisites": ["binary-search", "time-complexity"]}
+  ],
+  "resources": [
+    {"id": "arrays-note", "revision": "v1", "topic": "arrays", "stage": "theory", "minutes": 8, "published_at": "2026-10-01T00:00:00Z", "withdrawn_at": "2026-10-14T00:00:00Z"},
+    {"id": "arrays-note", "revision": "v2", "topic": "arrays", "stage": "theory", "minutes": 12, "published_at": "2026-10-14T00:00:00Z"},
+    {"id": "arrays-visual", "revision": "v1", "topic": "arrays", "stage": "theory", "minutes": 8, "published_at": "2026-10-20T00:00:00Z"},
+    {"id": "arrays-drill", "revision": "v1", "topic": "arrays", "stage": "practice", "minutes": 10, "difficulty": "easy", "languages": ["python"], "published_at": "2026-10-01T00:00:00Z"},
+    {"id": "arrays-matrix", "revision": "v1", "topic": "arrays", "stage": "practice", "minutes": 10, "difficulty": "medium", "languages": ["python"], "published_at": "2026-10-01T00:00:00Z"},
+    {"id": "arrays-check", "revision": "v1", "topic": "arrays", "stage": "independent_check", "minutes": 8, "difficulty": "easy", "languages": ["python"], "published_at": "2026-10-01T00:00:00Z"},
+    {"id": "arrays-check-old", "revision": "v1", "topic": "arrays", "stage": "independent_check", "minutes": 7, "difficulty": "easy", "languages": ["python"], "published_at": "2026-10-01T00:00:00Z", "withdrawn_at": "2026-10-08T00:00:00Z"},
+    {"id": "arrays-check-new", "revision": "v1", "topic": "arrays", "stage": "independent_check", "minutes": 7, "difficulty": "easy", "languages": ["python"], "published_at": "2026-10-25T00:00:00Z"},
+    {"id": "arrays-check-go", "revision": "v1", "topic": "arrays", "stage": "independent_check", "minutes": 7, "difficulty": "easy", "languages": ["go"], "published_at": "2026-10-01T00:00:00Z"},
+    {"id": "search-note", "revision": "v1", "topic": "binary-search", "stage": "theory", "minutes": 10, "published_at": "2026-10-01T00:00:00Z"},
+    {"id": "search-drill", "revision": "v1", "topic": "binary-search", "stage": "practice", "minutes": 10, "difficulty": "easy", "languages": ["python"], "published_at": "2026-10-01T00:00:00Z"},
+    {"id": "search-check", "revision": "v1", "topic": "binary-search", "stage": "independent_check", "minutes": 8, "difficulty": "medium", "languages": ["python"], "published_at": "2026-10-01T00:00:00Z"},
+    {"id": "complexity-note", "revision": "v1", "topic": "time-complexity", "stage": "theory", "minutes": 8, "published_at": "2026-10-01T00:00:00Z"},
+    {"id": "complexity-drill", "revision": "v1", "topic": "time-complexity", "stage": "practice", "minutes": 10, "difficulty": "easy", "published_at": "2026-10-01T00:00:00Z"},
+    {"id": "complexity-check", "revision": "v1", "topic": "time-complexity", "stage": "independent_check", "minutes": 7, "difficulty": "medium", "published_at": "2026-10-01T00:00:00Z"},
+    {"id": "boundaries-note", "revision": "v1", "topic": "binary-boundaries", "stage": "theory", "minutes": 9, "published_at": "2026-10-01T00:00:00Z"},
+    {"id": "boundaries-drill", "revision": "v1", "topic": "binary-boundaries", "stage": "practice", "minutes": 10, "difficulty": "easy", "languages": ["python"], "published_at": "2026-10-01T00:00:00Z"},
+    {"id": "boundaries-check", "revision": "v1", "topic": "binary-boundaries", "stage": "independent_check", "minutes": 9, "difficulty": "medium", "languages": ["python"], "published_at": "2026-10-01T00:00:00Z"}
+  ],
+  "curriculum": [
+    {"topic": "arrays", "resources": ["arrays-note", "arrays-drill", "arrays-check"]},
+    {"topic": "binary-search", "resources": ["search-note", "search-drill", "search-check"]},
+    {"topic": "time-complexity", "resources": ["complexity-note", "complexity-drill", "complexity-check"]},
+    {"topic": "binary-boundaries", "resources": ["boundaries-note", "boundaries-drill", "boundaries-check"]}
+  ],
+  "cases": [
+    {
+      "id": "cold-start",
+      "as_of": "2026-10-05T09:00:00Z",
+      "targets": ["binary-search"],
+      "budget": {"timezone": "UTC", "available_minutes": 90, "goal_minutes": 90, "reserved_minutes": 0, "max_weeks": 2},
+      "languages": ["python"],
+      "expect": {"scheduled_checks": ["arrays", "binary-search"]}
+    },
+    {
+      "id": "tight-deadline",
+      "as_of": "2026-10-07T09:00:00Z",
+      "targets": ["binary-search"],
+      "budget": {"timezone": "UTC", "deadline": "2026-10-07", "available_minutes": 42, "goal_minutes": 42, "reserved_minutes": 0, "max_weeks": 2},
+      "languages": ["python"],
+      "expect": {"gaps": [{"topic": "arrays", "reason": "time_budget"}, {"topic": "binary-search", "reason": "prerequisite"}]}
+    },
+    {
+      "id": "difficulty-feedback",
+      "as_of": "2026-10-09T09:00:00Z",
+      "targets": ["arrays"],
+      "budget": {"timezone": "UTC", "available_minutes": 90, "goal_minutes": 90, "reserved_minutes": 15, "max_weeks": 1},
+      "languages": ["python"],
+      "difficulty_hints": {"arrays": 1},
+      "expect": {"scheduled_checks": ["arrays"]}
+    },
+    {
+      "id": "known-prerequisite",
+      "as_of": "2026-10-12T09:00:00Z",
+      "targets": ["binary-search"],
+      "budget": {"timezone": "UTC", "available_minutes": 42, "goal_minutes": 42, "reserved_minutes": 0, "max_weeks": 1},
+      "languages": ["python"],
+      "observations": [
+        {"topic": "arrays", "observed_at": "2026-10-10T14:00:00Z", "available_at": "2026-10-12T09:00:00Z", "score_bps": 8700, "sufficient": true}
+      ],
+      "expect": {"scheduled_checks": ["binary-search"]}
+    },
+    {
+      "id": "no-permitted-check",
+      "as_of": "2026-10-19T09:00:00Z",
+      "targets": ["binary-search"],
+      "budget": {"timezone": "UTC", "available_minutes": 120, "goal_minutes": 100, "reserved_minutes": 20, "max_weeks": 2},
+      "languages": ["python"],
+      "denied_resources": ["arrays-check"],
+      "expect": {"gaps": [{"topic": "arrays", "reason": "missing_resource"}, {"topic": "binary-search", "reason": "prerequisite"}]}
+    },
+    {
+      "id": "late-grades",
+      "as_of": "2026-10-19T10:00:00Z",
+      "targets": ["binary-boundaries"],
+      "budget": {"timezone": "UTC", "available_minutes": 100, "goal_minutes": 100, "reserved_minutes": 20, "max_weeks": 2},
+      "languages": ["python"],
+      "observations": [
+        {"topic": "arrays", "observed_at": "2026-10-01T14:00:00Z", "available_at": "2026-10-01T15:00:00Z", "score_bps": 8500, "sufficient": false},
+        {"topic": "arrays", "observed_at": "2026-10-18T14:00:00Z", "available_at": "2026-10-20T14:00:00Z", "score_bps": 9000, "sufficient": true},
+        {"topic": "time-complexity", "observed_at": "2026-10-19T11:00:00Z", "available_at": "2026-10-19T12:00:00Z", "score_bps": 9000, "sufficient": true}
+      ],
+      "activity": [
+        {"resource": "arrays-check", "revision": "v1", "observed_at": "2026-10-18T14:00:00Z", "available_at": "2026-10-20T14:00:00Z", "completed": true}
+      ],
+      "expect": {"scheduled_checks": ["arrays", "binary-search", "time-complexity", "binary-boundaries"]}
+    },
+    {
+      "id": "seen-check",
+      "as_of": "2026-10-19T11:00:00Z",
+      "targets": ["arrays"],
+      "budget": {"timezone": "UTC", "available_minutes": 100, "goal_minutes": 100, "reserved_minutes": 20, "max_weeks": 2},
+      "languages": ["python"],
+      "activity": [
+        {"resource": "arrays-check", "revision": "v1", "observed_at": "2026-10-03T14:00:00Z", "available_at": "2026-10-03T14:00:00Z", "completed": false}
+      ],
+      "expect": {"gaps": [{"topic": "arrays", "reason": "missing_resource"}]}
+    },
+    {
+      "id": "alternative-resource",
+      "as_of": "2026-10-26T09:00:00Z",
+      "targets": ["arrays"],
+      "budget": {"timezone": "UTC", "available_minutes": 100, "goal_minutes": 100, "reserved_minutes": 20, "max_weeks": 1},
+      "languages": ["python"],
+      "denied_resources": ["arrays-note"],
+      "expect": {"scheduled_checks": ["arrays"]}
+    }
+  ]
+}
