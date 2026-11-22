@@ -1,4 +1,4 @@
-.PHONY: run build test ctest resource-ctest diagnostic-ctest evidence-ctest lint benchmark tidy migrate-up
+.PHONY: run build test ctest resource-ctest diagnostic-ctest evidence-ctest activity-ctest lint benchmark tidy migrate-up
 LOCAL_BIN := $(CURDIR)/bin
 GOLANGCI_LINT ?= $(LOCAL_BIN)/golangci-lint
 
@@ -26,6 +26,10 @@ resource-ctest:
 diagnostic-ctest:
 	@test -n "$${DIAGNOSTIC_TEST_DSN:-}" || (echo "DIAGNOSTIC_TEST_DSN must point to a dedicated test database"; exit 1)
 	go test -race ./internal/httpapi -run Diagnostic -count=1
+
+activity-ctest:
+	@test -n "$${STUDY_ACTIVITY_TEST_DSN:-}" || (echo "STUDY_ACTIVITY_TEST_DSN must point to a dedicated test database"; exit 1)
+	go test -race -count=1 ./internal/studyactivity
 
 evidence-ctest:
 	@test -n "$${LEARNING_EVIDENCE_TEST_DSN:-}" || (echo "LEARNING_EVIDENCE_TEST_DSN must point to a dedicated test database"; exit 1)

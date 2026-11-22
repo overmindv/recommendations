@@ -19,6 +19,7 @@ import (
 	catalogprojection "github.com/overmindv/recommendations/internal/projection/catalog"
 	"github.com/overmindv/recommendations/internal/projection/resources"
 	"github.com/overmindv/recommendations/internal/savedplans"
+	"github.com/overmindv/recommendations/internal/studyactivity"
 	"github.com/overmindv/recommendations/internal/studyplans"
 	"github.com/overmindv/recommendations/internal/topiccatalog"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -91,6 +92,10 @@ func run() int {
 		var baselines *mastery.Postgres
 		var retention *mastery.Retention
 		var studyService httpapi.StudyPlans
+		var activityStore httpapi.ActivityStore
+		if cfg.ActivityTTL > 0 && app.Config().DatabaseURL == "" {
+			return errors.New("study activity requires DATABASE_URL")
+		}
 		if source != nil && app.Config().DatabaseURL == "" {
 			return errors.New("catalog projection requires DATABASE_URL")
 		}
@@ -129,6 +134,14 @@ func run() int {
 				app.AddRunnable("material-resource-projection", resources.NewContentWorker(projected, materialSource, materialLog, app.Logger()).Run)
 				verified = resources.NewEligibility(projected, taskSource, materialSource)
 				eligibility, diagnosticCatalog = verified, verified
+			}
+			if cfg.ActivityTTL > 0 {
+				activity, activityErr := studyactivity.NewPostgres(pool, cfg.ActivityTTL, verified)
+				if activityErr != nil {
+					return activityErr
+				}
+				activityStore = activity
+				app.AddRunnable("study-activity-expiry", pruneActivity(app.Logger(), activity))
 			}
 			sessions = diagnostic.NewService(learnerStore, diagnostic.NewPostgres(pool), diagnosticCatalog)
 			if cfg.Mastery != nil {
@@ -172,6 +185,7 @@ func run() int {
 		httpapi.RegisterMastery(app.HTTP(), cfg.ServiceToken, baselines)
 		httpapi.RegisterRetention(app.HTTP(), cfg.ServiceToken, retention)
 		httpapi.RegisterStudyPlans(app.HTTP(), cfg.ServiceToken, studyService)
+		httpapi.RegisterStudyActivity(app.HTTP(), cfg.ServiceToken, activityStore)
 
 		return nil
 	}, parker.WithAppName("recommendations"), func(o *parker.Options) { o.HTTPAddress = cfg.HTTPAddress; o.WriteTimeout = 35 * time.Second })

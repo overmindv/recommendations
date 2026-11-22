@@ -21,6 +21,7 @@ type Config struct {
 	Mastery              *mastery.Policy
 	RetentionInterval    time.Duration
 	StudyPlans           *StudyPlans
+	ActivityTTL          time.Duration
 }
 
 func Load() (Config, error) {
@@ -72,6 +73,11 @@ func Load() (Config, error) {
 	}
 
 	c.StudyPlans, err = loadStudyPlans(c)
+	if err != nil {
+		return Config{}, err
+	}
+
+	c.ActivityTTL, err = loadActivity(c)
 	if err != nil {
 		return Config{}, err
 	}
