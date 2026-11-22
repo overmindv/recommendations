@@ -159,6 +159,8 @@ func respondStudyPlan(w http.ResponseWriter, view any, err error) {
 		writeJSON(w, http.StatusConflict, publicError{"IDEMPOTENCY_CONFLICT", "Key already used"})
 	case errors.Is(err, studyplans.ErrStepBlocked):
 		writeJSON(w, http.StatusConflict, publicError{"STEP_BLOCKED", "Step is not actionable"})
+	case errors.Is(err, studyplans.ErrResourceUnavailable):
+		writeJSON(w, http.StatusConflict, publicError{"RESOURCE_UNAVAILABLE", "Step resource is not available"})
 	case errors.Is(err, studyplans.ErrPending):
 		writeJSON(w, http.StatusConflict, publicError{"GRADE_PENDING", "Independent grade is not available"})
 	case errors.Is(err, studyplans.ErrLimit):

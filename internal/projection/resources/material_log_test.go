@@ -115,7 +115,7 @@ func TestMaterialLogResumesFromCommittedPosition(t *testing.T) {
 		t.Fatal("event before the snapshot escaped the broker checkpoint")
 	}
 	// Первое чтение не зафиксировано в БД. Возврат к его offset не должен терять сообщения.
-	if err := store.applyContent(ctx, state, next, replay); err != nil {
+	if err := store.applyContent(ctx, state, next, replay, stream.VerifiedAt(next)); err != nil {
 		t.Fatal(err)
 	}
 	for {
@@ -124,12 +124,17 @@ func TestMaterialLogResumesFromCommittedPosition(t *testing.T) {
 			break
 		}
 		next, replay := read(*state.Kafka)
-		if err := store.applyContent(ctx, state, next, replay); err != nil {
+		if err := store.applyContent(ctx, state, next, replay, stream.VerifiedAt(next)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	assertProjectedRow(t, ctx, store, state, resourceID, 6, false, 0)
 	assertProjectedRow(t, ctx, store, state, otherTopic, 7, true, 1)
+	var synced *time.Time
+	if err := store.pool.QueryRow(ctx, "SELECT last_synced_at FROM resource_projection_checkpoints WHERE origin='content'").
+		Scan(&synced); err != nil || synced == nil || state.Lagging {
+		t.Fatal("caught-up material checkpoint was not confirmed:", synced, err)
+	}
 
 	expand := kmsg.NewPtrCreatePartitionsRequest()
 	expand.Topics = []kmsg.CreatePartitionsRequestTopic{{Topic: topic, Count: 3}}
@@ -148,6 +153,19 @@ func TestMaterialLogResumesFromCommittedPosition(t *testing.T) {
 		}
 	}
 	t.Fatal("old offsets accepted after partition growth")
+}
+
+func TestMaterialFreshnessNeedsCaughtUpBrokerOffsets(t *testing.T) {
+	t.Parallel()
+
+	sample := time.Now()
+	log := MaterialLog{boundsAt: sample, bounds: materialBounds{id: "known", end: map[int32]int64{0: 10, 1: 5}}}
+	if stamp := log.VerifiedAt(KafkaPosition{TopicID: "known", Offsets: map[int32]int64{0: 10, 1: 4}}); !stamp.IsZero() {
+		t.Fatal("lagging partition counted as synchronized")
+	}
+	if stamp := log.VerifiedAt(KafkaPosition{TopicID: "known", Offsets: map[int32]int64{0: 10, 1: 5}}); !stamp.Equal(sample) {
+		t.Fatal("checkpoint changed the original broker observation time:", stamp)
+	}
 }
 
 func TestMaterialLogRejectsExpiredAndReplacedPositions(t *testing.T) {

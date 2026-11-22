@@ -34,6 +34,7 @@ type MaterialLog struct {
 	reader   *kgo.Client
 	readPos  KafkaPosition
 	boundsAt time.Time
+	bounds   materialBounds
 }
 
 // Один экземпляр читает один поток. При смене checkpoint буфер старого чтения больше не используется.
@@ -70,6 +71,7 @@ func (l *MaterialLog) Start(ctx context.Context) (KafkaPosition, error) {
 	l.resetReader()
 	// Следующий poll перепроверит, не изменился ли топик за время загрузки снимка.
 	l.boundsAt = time.Time{}
+	l.bounds = materialBounds{}
 
 	return KafkaPosition{TopicID: bounds.id, Offsets: bounds.end}, nil
 }
@@ -87,6 +89,7 @@ func (l *MaterialLog) Read(ctx context.Context, pos KafkaPosition) (KafkaPositio
 			return KafkaPosition{}, nil, errResnapshot
 		}
 		l.boundsAt = time.Now()
+		l.bounds = bounds
 	}
 	if !same {
 		if err := l.openReader(pos); err != nil {
@@ -104,6 +107,11 @@ func (l *MaterialLog) Read(ctx context.Context, pos KafkaPosition) (KafkaPositio
 
 		return KafkaPosition{}, nil, problem
 	}
+	fetches.EachPartition(func(partition kgo.FetchTopicPartition) {
+		if end, ok := l.bounds.end[partition.Partition]; partition.Topic == l.topic && ok && partition.HighWatermark > end {
+			l.bounds.end[partition.Partition] = partition.HighWatermark
+		}
+	})
 	next := KafkaPosition{TopicID: pos.TopicID, Offsets: maps.Clone(pos.Offsets)}
 	var events []Event
 	for record := range fetches.RecordsAll() {
@@ -127,6 +135,18 @@ func (l *MaterialLog) Read(ctx context.Context, pos KafkaPosition) (KafkaPositio
 	return next, events, nil
 }
 
+func (l *MaterialLog) VerifiedAt(pos KafkaPosition) time.Time {
+	if l.boundsAt.IsZero() || l.bounds.id != pos.TopicID || len(l.bounds.end) != len(pos.Offsets) {
+		return time.Time{}
+	}
+	for partition, end := range l.bounds.end {
+		if offset, ok := pos.Offsets[partition]; !ok || offset < end {
+			return time.Time{}
+		}
+	}
+
+	return l.boundsAt
+}
 func (l *MaterialLog) openReader(pos KafkaPosition) error {
 	l.resetReader()
 	partitions := make(map[int32]kgo.Offset, len(pos.Offsets))

@@ -521,7 +521,7 @@ components:
             $ref: '#/components/schemas/GoalInput'
   responses:
     StudyPlan:
-      description: The saved study plan, versioned inputs and current progress.
+      description: Saved study plan and current progress. Generation returns the previous plan if the catalog is unavailable.
       headers:
         Cache-Control:
           schema:
@@ -557,7 +557,8 @@ components:
     Error:
       description: >
         400 INVALID_ARGUMENT, 403 PERMISSION_DENIED, 404 NOT_FOUND, 409 PROFILE_REQUIRED,
-        VERSION_CONFLICT, IDEMPOTENCY_CONFLICT, GOAL_LIMIT, STEP_BLOCKED, GRADE_PENDING, BUDGET_EXCEEDED or PLAN_LIMIT, 413 body too large,
+        VERSION_CONFLICT, IDEMPOTENCY_CONFLICT, GOAL_LIMIT, STEP_BLOCKED, RESOURCE_UNAVAILABLE, GRADE_PENDING,
+        BUDGET_EXCEEDED or PLAN_LIMIT, 413 body too large,
         415 unsupported media type, 422 UNKNOWN_TOPIC, UNKNOWN_TEMPLATE or INFEASIBLE_GOAL,
         429 WRITE_LIMIT, or 503 SERVICE_UNAVAILABLE.
       content:
@@ -571,6 +572,38 @@ components:
               message:
                 type: string
   schemas:
+    StudyCatalogFreshness:
+      type: object
+      required: [status]
+      properties:
+        status:
+          enum: [fresh, stale, unavailable]
+        checked_at:
+          type: string
+          format: date-time
+        entities_synced_at:
+          type: string
+          format: date-time
+        tasks_synced_at:
+          type: string
+          format: date-time
+        content_synced_at:
+          type: string
+          format: date-time
+    StudyPlanGuidance:
+      type: object
+      required: [basis, template_version, verified_topics, recommend_diagnostic]
+      properties:
+        basis:
+          enum: [template, evidence]
+        template_version:
+          type: string
+        verified_topics:
+          type: integer
+          minimum: 0
+          maximum: 64
+        recommend_diagnostic:
+          type: boolean
     StudyFeedbackReceipt:
       type: object
       required: [request_id, plan_version, action, accepted_at]
@@ -606,6 +639,8 @@ components:
           minimum: 1
         stale:
           type: boolean
+        freshness:
+          $ref: '#/components/schemas/StudyCatalogFreshness'
         steps:
           type: array
           maxItems: 128
@@ -779,6 +814,22 @@ components:
           type: array
           items:
             type: object
+        coverage_gaps:
+          type: array
+          maxItems: 64
+          items:
+            type: object
+            required: [topic_id, stage, reason]
+            properties:
+              topic_id:
+                type: string
+                format: uuid
+              stage:
+                enum: [theory, practice, independent_check]
+              reason:
+                const: missing_resource
+        guidance:
+          $ref: '#/components/schemas/StudyPlanGuidance'
         suggestions:
           type: array
           items:
@@ -787,6 +838,8 @@ components:
           type: boolean
         stale:
           type: boolean
+        freshness:
+          $ref: '#/components/schemas/StudyCatalogFreshness'
         paused_at:
           type: string
           format: date-time
@@ -795,7 +848,7 @@ components:
           minimum: 1
           maximum: 128
         blocked_reason:
-          enum: [stale_plan, check_failed, unverified_prerequisite, paused, replanning]
+          enum: [stale_plan, check_failed, unverified_prerequisite, paused, replanning, catalog_stale, catalog_unavailable]
         goal_demonstrated:
           type: boolean
     StudyWeek:

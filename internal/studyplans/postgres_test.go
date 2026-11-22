@@ -343,7 +343,9 @@ func TestPostgresGenerationUsesProjectedEvidence(t *testing.T) {
 	})
 	service := NewService(store, NewProjectedBuilder(pool, owner, fixture.Plan.RankingPolicy, fixture.EvidencePolicy))
 	initial, err := service.Generate(ctx, actor, goal, input)
-	if err != nil || initial.NextStep == nil || initial.GoalDemonstrated {
+	if err != nil || initial.NextStep == nil || initial.GoalDemonstrated || initial.Guidance == nil ||
+		initial.Guidance.Basis != "template" || initial.Guidance.TemplateVersion != "practice:1" ||
+		!initial.Guidance.RecommendDiagnostic || initial.Guidance.VerifiedTopics != 0 {
 		t.Fatal("empty history was treated as verified:", initial, err)
 	}
 	if _, evidenceErr := pool.Exec(ctx, `INSERT INTO learning_task_outcomes
@@ -359,8 +361,54 @@ func TestPostgresGenerationUsesProjectedEvidence(t *testing.T) {
 	input.RequestID, input.PlanVersion = id(17), 1
 	refreshed, err := service.Generate(ctx, actor, goal, input)
 	if err != nil || refreshed.Version != 2 || !refreshed.GoalDemonstrated || refreshed.NextStep != nil ||
-		refreshed.EvidenceWatermark == initial.EvidenceWatermark || calls != 2 {
+		refreshed.EvidenceWatermark == initial.EvidenceWatermark || calls != 2 ||
+		refreshed.Guidance == nil || refreshed.Guidance.Basis != evidenceBasis || refreshed.Guidance.RecommendDiagnostic {
 		t.Fatal("new generation did not use the updated evidence:", refreshed, err)
+	}
+}
+
+//nolint:paralleltest // Тест меняет состояние проекций в выделенной БД.
+func TestPostgresEmptyStudyPoolShowsCoverageGap(t *testing.T) {
+	ctx, pool := t.Context(), studyTestPool(t)
+	id, store := studySeed(t, pool), NewPostgres(pool)
+	actor, goal, topic := id(1), id(3), id(4)
+	input := Generation{Expected: Expected{GoalVersion: 1, AvailabilityVersion: 1}, RequestID: id(16)}
+	source, _, prepareErr := store.Prepare(ctx, actor, goal, input)
+	if prepareErr != nil {
+		t.Fatal(prepareErr)
+	}
+	if _, err := pool.Exec(ctx, `
+		WITH graph AS (
+		    UPDATE catalog_projection_state SET active_generation=active_generation+1,rebuild=false,last_synced_at=now()
+		    WHERE singleton RETURNING active_generation
+		)
+		INSERT INTO catalog_projected_topics (generation,topic_id,revision,tombstone,metadata)
+		SELECT active_generation,$1,1,false,'{"status":"active"}' FROM graph`, topic); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, "UPDATE resource_projection_checkpoints SET active_generation=1,last_synced_at=now()"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, "UPDATE learner_goals SET template_version='exam:1' WHERE id=$1", goal); err != nil {
+		t.Fatal(err)
+	}
+	fixture := testDraft(t, source, id)
+	empty := studySourceFunc(func(context.Context, string, string, []string) ([]planner.StudyResource, error) {
+		return nil, nil
+	})
+	builder := NewProjectedBuilder(pool, empty, fixture.Plan.RankingPolicy, fixture.EvidencePolicy).WithProjectionFreshness(time.Minute)
+	service := NewService(store, builder).WithLiveCatalog(nil, time.Minute)
+	view, err := service.Generate(ctx, actor, goal, input)
+	if err != nil || view.Version != 1 || view.NextStep != nil || view.GoalDemonstrated ||
+		view.Freshness == nil || view.Freshness.Status != "fresh" || view.Guidance == nil ||
+		view.Guidance.TemplateVersion != "exam:1" || !view.Guidance.RecommendDiagnostic ||
+		len(view.CoverageGaps) != 1 || view.CoverageGaps[0].TopicID != topic {
+		t.Fatal("empty library invented a step or hid the coverage gap:", err)
+	}
+	for _, week := range view.Weeks {
+		if len(week.Items) != 0 {
+			t.Fatal("empty resource pool returned a scheduled item")
+		}
 	}
 }
 
@@ -377,6 +425,17 @@ func BenchmarkCurrentStudyPlan(b *testing.B) {
 	}
 }
 
+func BenchmarkCurrentStudyPlanWithFreshness(b *testing.B) {
+	store, actor, goal := maxStudyPlanFixture(b)
+	service := NewService(store, nil).WithLiveCatalog(nil, 90*time.Second)
+	b.ReportAllocs()
+	for b.Loop() {
+		view, err := service.Current(b.Context(), actor, goal)
+		if err != nil || view.Version != 1 || view.Freshness == nil || findItem(view, planner.MaxLearningItems) == nil {
+			b.Fatal("stored plan or its projection state was lost:", err)
+		}
+	}
+}
 func BenchmarkExplainStudyPlan(b *testing.B) {
 	store, actor, goal := maxStudyPlanFixture(b)
 	b.ReportAllocs()

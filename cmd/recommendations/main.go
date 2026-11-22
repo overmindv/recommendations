@@ -195,12 +195,13 @@ func run() int {
 			}
 			if cfg.StudyPlans != nil {
 				planSource := resources.NewStudySource(verified, cfg.StudyPlans.Recent)
-				builder := studyplans.NewProjectedBuilder(pool, planSource, cfg.StudyPlans.Ranking, *cfg.Mastery)
+				builder := studyplans.NewProjectedBuilder(pool, planSource, cfg.StudyPlans.Ranking, *cfg.Mastery).
+					WithProjectionFreshness(cfg.StudyPlans.ProjectionMaxAge)
 				studyStore := studyplans.NewPostgres(pool)
 				if goalProducer != nil {
 					studyStore = studyStore.WithCompletionChecks()
 				}
-				studyService = studyplans.NewService(studyStore, builder)
+				studyService = studyplans.NewService(studyStore, builder).WithLiveCatalog(planSource, cfg.StudyPlans.ProjectionMaxAge)
 				app.AddRunnable("study-plan-adaptation", studyplans.NewRebuildWorker(studyStore, builder, app.Logger()).Run)
 			}
 		}

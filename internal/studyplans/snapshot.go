@@ -22,6 +22,7 @@ type calendarDocument struct {
 	Weeks          []WeekHeader              `json:"weeks"`
 	UnmetOutcomes  []planner.UnmetOutcome    `json:"unmet_outcomes"`
 	Suggestions    []planner.ScopeSuggestion `json:"suggestions"`
+	Guidance       *Guidance                 `json:"guidance,omitempty"`
 }
 
 func saveDraft(ctx context.Context, tx pgx.Tx, goal string, version int64, source Sources, draft Draft, carried []int) error {
@@ -81,6 +82,7 @@ func prepareDraft(goal string, version int64, source Sources, draft Draft, carri
 	doc := calendarDocument{
 		Timezone: plan.Timezone, WeeklyMinutes: plan.WeeklyMinutes, HorizonLimited: plan.HorizonLimited,
 		Weeks: make([]WeekHeader, 0, len(plan.Weeks)), UnmetOutcomes: plan.UnmetOutcomes, Suggestions: plan.Suggestions,
+		Guidance: draft.Guidance,
 	}
 	rows := make([][]any, 0, min(planner.MaxLearningItems, len(plan.Weeks)*3))
 	var previous string
@@ -182,6 +184,12 @@ func readView(ctx context.Context, tx pgx.Tx, goal string, version int64, source
 	view.EvidenceWatermark = hex.EncodeToString(watermark)
 	view.Timezone, view.WeeklyMinutes, view.HorizonLimited = cal.Timezone, cal.WeeklyMinutes, cal.HorizonLimited
 	view.UnmetOutcomes, view.Suggestions = cal.UnmetOutcomes, cal.Suggestions
+	view.Guidance = cal.Guidance
+	for _, outcome := range view.UnmetOutcomes {
+		if outcome.Reason == "missing_resource" {
+			view.CoverageGaps = append(view.CoverageGaps, outcome)
+		}
+	}
 	view.Weeks = make([]Week, len(cal.Weeks))
 	for i, week := range cal.Weeks {
 		view.Weeks[i] = Week{WeekHeader: week, Items: []Item{}}

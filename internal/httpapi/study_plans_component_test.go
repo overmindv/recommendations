@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	contentpb "github.com/overmindv/content/pkg/api/content"
 	"github.com/overmindv/recommendations/internal/mastery"
 	"github.com/overmindv/recommendations/internal/planner"
+	"github.com/overmindv/recommendations/internal/projection/catalog"
 	"github.com/overmindv/recommendations/internal/projection/resources"
 	"github.com/overmindv/recommendations/internal/ranking"
 	"github.com/overmindv/recommendations/internal/studyplans"
@@ -55,13 +57,13 @@ func TestPostgresStudyPlanThroughOwners(t *testing.T) {
 	batch.Queue("INSERT INTO learner_availability (user_id,weekly_minutes,timezone) VALUES ($1,240,'UTC'),($2,60,'UTC')", actor, peer)
 	batch.Queue(`INSERT INTO learner_goals (id,user_id,title,target_topics,weekly_minutes,active,preferences)
 		VALUES ($1,$2,'Goal',ARRAY[$3::uuid],240,true,'{"languages":["python"]}')`, goal, actor, topic)
-	batch.Queue("UPDATE catalog_projection_state SET active_generation=11 WHERE singleton")
-	batch.Queue("UPDATE resource_projection_checkpoints SET active_generation=11")
+	batch.Queue("UPDATE catalog_projection_state SET active_generation=11,rebuild=false,last_synced_at=now() WHERE singleton")
+	batch.Queue("UPDATE resource_projection_checkpoints SET active_generation=11,last_synced_at=now()")
 	batch.Queue(`INSERT INTO catalog_projected_topics (generation,topic_id,revision,tombstone,metadata)
 		VALUES (11,$1,1,false,'{"status":"active"}')`, topic)
 	for _, material := range []int{10, 11, 12} {
 		batch.Queue(`INSERT INTO resource_projection_items (origin,generation,resource_id,version,revision_id,metadata)
-			VALUES ('content',11,$1,1,$2,'{"Type":"note","EstimatedMinutes":5}')`, id(material), id(100+material))
+			VALUES ('content',11,$1,1,$2,'{"Type":"note","Title":"Note","Format":"markdown","Difficulty":"","EstimatedMinutes":5}')`, id(material), id(100+material))
 		batch.Queue(`INSERT INTO resource_projection_topics (origin,generation,resource_id,topic_id,weight)
 			VALUES ('content',11,$1,$2,1)`, id(material), topic)
 	}
@@ -74,7 +76,7 @@ func TestPostgresStudyPlanThroughOwners(t *testing.T) {
 		{24, "easy", "python"}, {25, "easy", "python"}, {26, "easy", "python"},
 	} {
 		batch.Queue(`INSERT INTO resource_projection_items (origin,generation,resource_id,version,revision_id,metadata)
-			VALUES ('tasks',11,$1,1,$2,jsonb_build_object('Type','programming','EstimatedMinutes',5,
+			VALUES ('tasks',11,$1,1,$2,jsonb_build_object('Type','programming','Title','Task','EstimatedMinutes',5,
 				'Difficulty',$3::text,'Runtimes',jsonb_build_array(jsonb_build_object('ID',$4::text,'Version','3.12'))))`,
 			id(task.id), id(100+task.id), task.difficulty, task.language)
 		batch.Queue(`INSERT INTO resource_projection_topics (origin,generation,resource_id,topic_id,weight)
@@ -99,7 +101,7 @@ func TestPostgresStudyPlanThroughOwners(t *testing.T) {
 
 	taskToken := strings.Repeat("t", 32)
 	pinned := id(90)
-	var tasksDown atomic.Bool
+	var tasksDown, practiceWithdrawn atomic.Bool
 	var ownerCalls atomic.Int32
 	tasksOwner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ownerCalls.Add(1)
@@ -139,7 +141,7 @@ func TestPostgresStudyPlanThroughOwners(t *testing.T) {
 
 					return
 				}
-				if resource.Task != id(26) {
+				if resource.Task != id(26) && (resource.Task != practice || !practiceWithdrawn.Load()) {
 					result = append(result, resource)
 				}
 			case "/v1/internal/resources/diagnostic-eligibility":
@@ -189,7 +191,9 @@ func TestPostgresStudyPlanThroughOwners(t *testing.T) {
 	}
 	evidence := mastery.Policy{Revision: "test-study-evidence", Algorithm: mastery.AlgorithmVersion, GapMaxBPS: 2500,
 		DemonstratedBPS: 6000, MinWeightedTasks: 1}
-	service := studyplans.NewService(studyplans.NewPostgres(pool), studyplans.NewProjectedBuilder(pool, source, policy, evidence))
+	const maxAge = 90 * time.Second
+	builder := studyplans.NewProjectedBuilder(pool, source, policy, evidence).WithProjectionFreshness(maxAge)
+	service := studyplans.NewService(studyplans.NewPostgres(pool), builder).WithLiveCatalog(source, maxAge)
 	router := http.NewServeMux()
 	serviceToken := strings.Repeat("w", 32)
 	RegisterStudyPlans(router, serviceToken, service)
@@ -216,8 +220,8 @@ func TestPostgresStudyPlanThroughOwners(t *testing.T) {
 		w := request(method, suffix, user, body, key, want)
 		var view studyplans.View
 		if want == http.StatusOK {
-			if err := json.NewDecoder(w.Body).Decode(&view); err != nil {
-				t.Fatal(err)
+			if decodeErr := json.NewDecoder(w.Body).Decode(&view); decodeErr != nil {
+				t.Fatal(decodeErr)
 			}
 		}
 
@@ -242,14 +246,19 @@ func TestPostgresStudyPlanThroughOwners(t *testing.T) {
 	for _, week := range plan.Weeks {
 		items = append(items, week.Items...)
 	}
-	if plan.Version != 1 || plan.NextStep == nil || *plan.NextStep != 1 || len(items) != 3 ||
+	if plan.Version != 1 || plan.Freshness == nil || plan.Freshness.Status != "fresh" || plan.Guidance == nil || plan.Guidance.Basis != "evidence" ||
+		plan.NextStep == nil || *plan.NextStep != 1 || len(items) != 3 ||
 		items[0].ID != theory || items[1].ID != practice || items[2].ID != check || items[2].RevisionID != id(122) ||
 		items[2].Stage != planner.StudyCheck {
 		t.Fatal("expected an available note, allowed practice and the reserved unseen task:", plan)
 	}
 	tasksDown.Store(true)
 	const next = `{"goal_version":1,"availability_version":1,"plan_version":1}`
-	send("PUT", "", actor, next, id(61), http.StatusServiceUnavailable)
+	fallback := send("PUT", "", actor, next, id(61), http.StatusOK)
+	if fallback.Version != 1 || fallback.EvidenceWatermark != plan.EvidenceWatermark ||
+		fallback.Freshness == nil || fallback.Freshness.Status != "unavailable" || fallback.NextStep != nil {
+		t.Fatal("owner outage did not return the last plan without a transition:", fallback)
+	}
 	callsAfterFailure := ownerCalls.Load()
 	replay := send("PUT", "", actor, initial, id(60), http.StatusOK)
 	reload := send("GET", "", actor, "", "", http.StatusOK)
@@ -258,7 +267,60 @@ func TestPostgresStudyPlanThroughOwners(t *testing.T) {
 		t.Fatal("catalog outage overwrote or recalculated the saved plan")
 	}
 	const progress = `{"plan_version":1}`
+	var entitiesDown atomic.Bool
+	entitiesDown.Store(true)
+	entities := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if entitiesDown.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+
+			return
+		}
+		_, _ = w.Write([]byte(`{"watermark":0,"through":0,"changes":[],"more":false}`))
+	}))
+	t.Cleanup(entities.Close)
+	entitiesClient, err := catalog.NewClient(entities.URL, strings.Repeat("e", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	poll := catalog.NewWorker(catalog.NewStore(pool), entitiesClient, slog.New(slog.DiscardHandler))
+	if _, err := pool.Exec(ctx, "UPDATE catalog_projection_state SET last_synced_at=now()-interval '2 minutes' WHERE singleton"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := poll.Step(ctx); err == nil {
+		t.Fatal("fixture did not reproduce an offline Entities owner")
+	}
+	const staleStatus = "stale"
+	stale := send("GET", "", actor, "", "", http.StatusOK)
+	if stale.Version != 1 || stale.Freshness == nil || stale.Freshness.Status != staleStatus ||
+		stale.Freshness.EntitiesAt == nil || stale.NextStep != nil || stale.BlockedReason != "catalog_stale" {
+		t.Fatal("offline Entities lost the saved plan or allowed a transition:", stale)
+	}
+	old := send("PUT", "", actor, next, id(61), http.StatusOK)
+	if old.Version != 1 || old.Freshness == nil || old.Freshness.Status != staleStatus || old.NextStep != nil ||
+		ownerCalls.Load() != callsAfterFailure {
+		t.Fatal("stale projection regenerated or checked an untrusted resource:", old)
+	}
+	request("PUT", "/steps/1/start", actor, progress, "", http.StatusServiceUnavailable)
+	entitiesDown.Store(false)
+	if moved, err := poll.Step(ctx); err != nil || moved {
+		t.Fatal("idle recovery could not confirm freshness without changing revision:", moved, err)
+	}
+	send("PUT", "/steps/1/start", actor, progress, "", http.StatusOK)
 	send("PUT", "/steps/1/activity", actor, progress, "", http.StatusOK)
+	request("PUT", "/steps/2/start", actor, progress, "", http.StatusServiceUnavailable)
+	tasksDown.Store(false)
+	practiceWithdrawn.Store(true)
+	revoked := request("PUT", "/steps/2/start", actor, progress, "", http.StatusConflict)
+	if !strings.Contains(revoked.Body.String(), "RESOURCE_UNAVAILABLE") {
+		t.Fatal("owner withdrawal did not block the saved task revision:", revoked.Body.String())
+	}
+	var started bool
+	if err := pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM study_plan_activity WHERE goal_id=$1 AND plan_version=1 AND ordinal=2)",
+		goal).Scan(&started); err != nil || started {
+		t.Fatal("blocked transition recorded activity:", started, err)
+	}
+	practiceWithdrawn.Store(false)
+	send("PUT", "/steps/2/start", actor, progress, "", http.StatusOK)
 	ready := send("PUT", "/steps/2/activity", actor, progress, "", http.StatusOK)
 	if ready.NextStep == nil || *ready.NextStep != 3 || ready.GoalDemonstrated {
 		t.Fatal("activity did not stay separate from mastery:", ready)
@@ -277,7 +339,7 @@ func TestPostgresStudyPlanThroughOwners(t *testing.T) {
 	tasksDown.Store(false)
 	batch = &pgx.Batch{}
 	batch.Queue(`INSERT INTO resource_projection_items (origin,generation,resource_id,version,revision_id,metadata)
-		VALUES ('tasks',11,$1,1,$2,'{"Type":"programming","Difficulty":"easy","EstimatedMinutes":5,"Runtimes":[{"ID":"python","Version":"3.12"}]}')`,
+		VALUES ('tasks',11,$1,1,$2,'{"Type":"programming","Title":"Check","Difficulty":"easy","EstimatedMinutes":5,"Runtimes":[{"ID":"python","Version":"3.12"}]}')`,
 		pinned, id(190))
 	batch.Queue(`INSERT INTO resource_projection_topics (origin,generation,resource_id,topic_id,weight)
 		VALUES ('tasks',11,$1,$2,1)`, pinned, topic)
@@ -311,7 +373,8 @@ func TestPostgresStudyPlanThroughOwners(t *testing.T) {
 	if !strings.Contains(reasons.Body.String(), `"code":"missing_resource"`) {
 		t.Fatal("withdrawn version did not report its limitation:", reasons.Body.String())
 	}
-	if withdrawn.Version != 3 || withdrawn.NextStep != nil || withdrawn.GoalDemonstrated || len(withdrawn.UnmetOutcomes) != 1 ||
+	if withdrawn.Version != 3 || withdrawn.NextStep != nil || withdrawn.GoalDemonstrated ||
+		len(withdrawn.CoverageGaps) != 1 || len(withdrawn.UnmetOutcomes) != 1 ||
 		withdrawn.UnmetOutcomes[0].Stage != planner.StudyCheck || withdrawn.UnmetOutcomes[0].Reason != "missing_resource" {
 		t.Fatal("withdrawn retention version was silently replaced:", withdrawn)
 	}

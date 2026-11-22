@@ -19,10 +19,11 @@ type ResourceSource interface {
 }
 
 type ProjectedBuilder struct {
-	pool      *pgxpool.Pool
-	resources ResourceSource
-	ranking   ranking.Policy
-	evidence  mastery.Policy
+	pool             *pgxpool.Pool
+	resources        ResourceSource
+	ranking          ranking.Policy
+	evidence         mastery.Policy
+	maxProjectionAge time.Duration
 }
 
 func NewProjectedBuilder(pool *pgxpool.Pool, resources ResourceSource, rankingPolicy ranking.Policy, evidencePolicy mastery.Policy) *ProjectedBuilder {
@@ -33,6 +34,12 @@ func (b *ProjectedBuilder) StudyAlternativeAvailable(ctx context.Context, key ra
 	owner, ok := b.resources.(studyAlternativeSource)
 
 	return ok && owner.StudyAlternativeAvailable(ctx, key)
+}
+
+func (b ProjectedBuilder) WithProjectionFreshness(maxAge time.Duration) *ProjectedBuilder {
+	b.maxProjectionAge = maxAge
+
+	return &b
 }
 
 func (b *ProjectedBuilder) Build(ctx context.Context, actor, goal string, source Sources) (Draft, error) {
@@ -46,7 +53,8 @@ func (b *ProjectedBuilder) Build(ctx context.Context, actor, goal string, source
 	}
 
 	return Draft{Plan: plan, EvidenceWatermark: evidence.Watermark, EvidencePolicy: b.evidence,
-		ScopeTopics: slices.Sorted(maps.Keys(input.Topics)), EvidenceTopics: evidence.Topics, EvidenceCaptured: now}, nil
+		ScopeTopics: slices.Sorted(maps.Keys(input.Topics)), EvidenceTopics: evidence.Topics, EvidenceCaptured: now,
+		Guidance: new(studyGuidance(source.TemplateVersion, evidence.Topics))}, nil
 }
 
 func (b *ProjectedBuilder) inputs(ctx context.Context, actor, goal string, source Sources, rank ranking.Policy,
@@ -56,6 +64,15 @@ func (b *ProjectedBuilder) inputs(ctx context.Context, actor, goal string, sourc
 	var evidence mastery.PlanningEvidence
 	var now time.Time
 	err := pgx.BeginTxFunc(ctx, b.pool, readOnly, func(tx pgx.Tx) error {
+		if b.maxProjectionAge > 0 {
+			freshness, err := readFreshness(ctx, tx, b.maxProjectionAge)
+			if err != nil {
+				return err
+			}
+			if freshness.Status != freshCatalog {
+				return ErrProjectionStale
+			}
+		}
 		if err := tx.QueryRow(ctx, "SELECT statement_timestamp()").Scan(&now); err != nil {
 			return err
 		}
