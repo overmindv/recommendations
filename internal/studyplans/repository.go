@@ -74,7 +74,8 @@ func (p *Postgres) Save(ctx context.Context, actor, goal string, input Generatio
 		if expectedErr := checkExpected(current, input); expectedErr != nil {
 			return expectedErr
 		}
-		if current.Expected != source.Expected || current.Budget.ReservedMinutes != source.Budget.ReservedMinutes {
+		if current.Expected != source.Expected || current.Budget.ReservedMinutes != source.Budget.ReservedMinutes ||
+			current.feedbackRevision != source.feedbackRevision {
 			return ErrConflict
 		}
 		version := input.PlanVersion + 1
@@ -132,6 +133,9 @@ func checkExpected(source Sources, input Generation) error {
 	if !source.Active || source.Expected != input.Expected {
 		return ErrConflict
 	}
+	if source.pausedAt != nil {
+		return ErrStepBlocked
+	}
 	if source.PlanVersion >= MaxVersionsPerGoal {
 		return ErrLimit
 	}
@@ -146,12 +150,15 @@ func readSources(ctx context.Context, tx pgx.Tx, actor, goal string) (Sources, e
 		SELECT g.version,a.version,COALESCE(h.version,0),g.target_topics,g.preferences,g.active,
 		       a.timezone,COALESCE(to_char(g.deadline,'YYYY-MM-DD'),''),a.weekly_minutes,g.weekly_minutes,
 		       (SELECT COALESCE(sum(other.weekly_minutes),0) FROM learner_goals AS other
-		        WHERE other.user_id=g.user_id AND other.active AND other.id<>g.id)
+		        WHERE other.user_id=g.user_id AND other.active AND other.id<>g.id),
+		       COALESCE(f.revision,0),f.paused_at,COALESCE(f.budget_from_plan,0),COALESCE(f.budget_goal_version,0)
 		FROM learner_goals AS g JOIN learner_availability AS a ON a.user_id=g.user_id
 		LEFT JOIN study_plan_heads AS h ON h.goal_id=g.id
+		LEFT JOIN study_plan_feedback_state AS f ON f.goal_id=g.id
 		WHERE g.id=$1 AND g.user_id=$2`, goal, actor).
 		Scan(&s.GoalVersion, &s.AvailabilityVersion, &s.PlanVersion, &s.TargetTopics, &preferences, &s.Active,
-			&s.Budget.Timezone, &s.Budget.Deadline, &s.Budget.AvailableMinutes, &s.Budget.GoalMinutes, &s.Budget.ReservedMinutes)
+			&s.Budget.Timezone, &s.Budget.Deadline, &s.Budget.AvailableMinutes, &s.Budget.GoalMinutes, &s.Budget.ReservedMinutes,
+			&s.feedbackRevision, &s.pausedAt, &s.budgetFromPlan, &s.budgetGoalVersion)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Sources{}, ErrNotFound
 	}
@@ -166,6 +173,16 @@ func readSources(ctx context.Context, tx pgx.Tx, actor, goal string) (Sources, e
 	s.Budget.MaxWeeks = planner.MaxLearningWeeks
 
 	return s, nil
+}
+
+func lockPlanGoal(ctx context.Context, tx pgx.Tx, actor, goal string) error {
+	var found bool
+	err := tx.QueryRow(ctx, "SELECT true FROM learner_goals WHERE id=$1 AND user_id=$2 FOR UPDATE", goal, actor).Scan(&found)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+
+	return err
 }
 
 func readReplay(ctx context.Context, tx pgx.Tx, goal string, input Generation, source Sources) (*View, error) {

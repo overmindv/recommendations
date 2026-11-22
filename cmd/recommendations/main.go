@@ -172,9 +172,7 @@ func run() int {
 				builder := studyplans.NewProjectedBuilder(pool, planSource, cfg.StudyPlans.Ranking, *cfg.Mastery)
 				studyStore := studyplans.NewPostgres(pool)
 				studyService = studyplans.NewService(studyStore, builder)
-				if cfg.StudyPlans.AdaptationWindow > 0 {
-					app.AddRunnable("study-plan-adaptation", studyplans.NewRebuildWorker(studyStore, builder, app.Logger()).Run)
-				}
+				app.AddRunnable("study-plan-adaptation", studyplans.NewRebuildWorker(studyStore, builder, app.Logger()).Run)
 			}
 		}
 		httpapi.RegisterVerifiedAI(app.HTTP(), cfg.ServiceToken, engine, eligibility)

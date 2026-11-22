@@ -40,6 +40,7 @@ type scored struct {
 
 func Rank(request Request, policy Policy) (Result, error) {
 	if !policy.Valid() || request.Limit < 1 || request.Limit > MaxResult ||
+		request.DifficultyShift < -1 || request.DifficultyShift > 1 ||
 		(request.PreviousKind != "" && request.PreviousKind != Theory && request.PreviousKind != Practice) {
 		return Result{}, ErrInvalid
 	}
@@ -65,7 +66,7 @@ func Rank(request Request, policy Policy) (Result, error) {
 		}
 		placements[place] = struct{}{}
 
-		points, err := score(row, request.Topics[row.TopicID].Knowledge, request.PreviousKind, request.BudgetMinutes, policy)
+		points, err := score(row, request.Topics[row.TopicID].Knowledge, request.PreviousKind, request.BudgetMinutes, request.DifficultyShift, policy)
 		if err != nil {
 			return Result{}, err
 		}
@@ -103,7 +104,7 @@ func Rank(request Request, policy Policy) (Result, error) {
 	return result, nil
 }
 
-func score(row Candidate, knowledge *Knowledge, previous Kind, budget int, policy Policy) (Factors, error) {
+func score(row Candidate, knowledge *Knowledge, previous Kind, budget, shift int, policy Policy) (Factors, error) {
 	gap, desired := policy.UnknownGapBPS, 0
 	if knowledge != nil && knowledge.Sufficient {
 		gap = max(0, policy.TargetBPS-knowledge.ScoreBPS)
@@ -120,6 +121,7 @@ func score(row Candidate, knowledge *Knowledge, previous Kind, budget int, polic
 		if !ok {
 			return Factors{}, ErrInvalid
 		}
+		desired = min(2, max(0, desired+shift))
 		distance := max(desired-difficulty, difficulty-desired)
 		fit = (2 - distance) * (maxBPS / 2)
 	}

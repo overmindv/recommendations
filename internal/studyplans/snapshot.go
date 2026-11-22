@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/overmindv/recommendations/internal/learnergoals"
 	"github.com/overmindv/recommendations/internal/planner"
 	"github.com/overmindv/recommendations/internal/ranking"
 )
@@ -23,7 +25,7 @@ type calendarDocument struct {
 }
 
 func saveDraft(ctx context.Context, tx pgx.Tx, goal string, version int64, source Sources, draft Draft, carried []int) error {
-	doc, rows, err := prepareDraft(goal, version, source, draft)
+	doc, rows, err := prepareDraft(goal, version, source, draft, carried)
 	if err != nil {
 		return err
 	}
@@ -66,7 +68,7 @@ func saveDraft(ctx context.Context, tx pgx.Tx, goal string, version int64, sourc
 	return saveExplanations(ctx, tx, goal, version, draft, carried)
 }
 
-func prepareDraft(goal string, version int64, source Sources, draft Draft) (calendarDocument, [][]any, error) {
+func prepareDraft(goal string, version int64, source Sources, draft Draft, carried []int) (calendarDocument, [][]any, error) {
 	plan := draft.Plan
 	budget := source.Budget
 	maxMinutes := min(budget.GoalMinutes, max(0, budget.AvailableMinutes-budget.ReservedMinutes))
@@ -87,19 +89,22 @@ func prepareDraft(goal string, version int64, source Sources, draft Draft) (cale
 		through, throughErr := time.Parse(time.DateOnly, week.Through)
 		if fromErr != nil || throughErr != nil || through.Before(from) || through.After(from.AddDate(0, 0, 6)) ||
 			week.From <= previous || (budget.Deadline != "" && week.Through > budget.Deadline) ||
-			week.CapacityMinutes < 0 || week.CapacityMinutes > maxMinutes ||
+			week.CapacityMinutes < 0 || week.CapacityMinutes > learnergoals.MaxWeeklyMinutes ||
 			week.PlannedMinutes < 0 || week.PlannedMinutes > week.CapacityMinutes ||
 			len(week.Items) > planner.MaxLearningItems-len(rows) {
 			return calendarDocument{}, nil, ErrInvalid
 		}
 		previous = week.Through
 		doc.Weeks = append(doc.Weeks, WeekHeader{StudyWeek: week.StudyWeek, PlannedMinutes: week.PlannedMinutes})
-		minutes := 0
+		minutes, carriedMinutes := 0, 0
 		for _, item := range week.Items {
 			if !validItem(item) {
 				return calendarDocument{}, nil, ErrInvalid
 			}
 			minutes += item.Minutes
+			if _, kept := slices.BinarySearch(carried, len(rows)+1); kept {
+				carriedMinutes += item.Minutes
+			}
 			components, err := json.Marshal(item.Components)
 			if err != nil {
 				return calendarDocument{}, nil, err
@@ -113,7 +118,7 @@ func prepareDraft(goal string, version int64, source Sources, draft Draft) (cale
 				string(item.Kind), string(item.Stage), item.Minutes, item.Score, components, guards, item.Superseded,
 			})
 		}
-		if minutes != week.PlannedMinutes {
+		if minutes != week.PlannedMinutes || week.CapacityMinutes > max(maxMinutes, carriedMinutes) {
 			return calendarDocument{}, nil, ErrInvalid
 		}
 	}
@@ -144,6 +149,9 @@ func validItem(item planner.StudyItem) bool {
 
 func readView(ctx context.Context, tx pgx.Tx, goal string, version int64, source Sources) (View, error) {
 	view := View{GoalID: goal, Version: version, Current: version == source.PlanVersion}
+	if view.Current {
+		view.PausedAt = source.pausedAt
+	}
 	var rawPolicy, rawEvidencePolicy, rawCal, watermark []byte
 	var reserved int
 	var now time.Time
@@ -181,11 +189,39 @@ func readView(ctx context.Context, tx pgx.Tx, goal string, version int64, source
 	if err := readItems(ctx, tx, source.actor, &view); err != nil {
 		return View{}, err
 	}
+	if source.feedbackRevision > 0 {
+		if err := readSkippedSteps(ctx, tx, &view); err != nil {
+			return View{}, err
+		}
+	}
 	if err := describeProgress(ctx, tx, source.actor, &view, now); err != nil {
 		return View{}, err
 	}
 
 	return view, nil
+}
+
+func readSkippedSteps(ctx context.Context, tx pgx.Tx, view *View) error {
+	rows, err := tx.Query(ctx, `
+		SELECT ordinal FROM study_plan_feedback WHERE goal_id=$1 AND plan_version=$2 AND action='skip'`,
+		view.GoalID, view.Version)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ordinal int
+		if err := rows.Scan(&ordinal); err != nil {
+			return err
+		}
+		item := findItem(*view, ordinal)
+		if item == nil {
+			return ErrInvalid
+		}
+		item.Skipped = true
+	}
+
+	return rows.Err()
 }
 
 func readItems(ctx context.Context, tx pgx.Tx, actor string, view *View) error {
